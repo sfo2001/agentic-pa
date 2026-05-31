@@ -1,0 +1,17 @@
+[project]
+name = "presenter-service"
+version = "0.1.0"
+description = "Thin MCP server: the present(path) UI signal for the Presentation pane"
+requires-python = ">=3.12"
+dependencies = ["mcp>=1.2.0,<2"]
+
+[project.scripts]
+present-server = "presenter.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["presenter*"]

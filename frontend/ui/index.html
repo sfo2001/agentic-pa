@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chief-of-Staff Notes</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Chief-of-Staff Notes</h1>
+    <span id="inbox-badge" class="badge" hidden>0 new</span>
+  </header>
+
+  <nav class="notes-buttons">
+    <button class="action" data-prompt="Process the inbox.">Process inbox</button>
+    <button class="action" data-prompt="Give me today's brief.">Daily brief</button>
+    <button class="action" data-prompt="Run the weekly review.">Weekly review</button>
+    <button id="undo" type="button">Undo last</button>
+    <label class="upload-label">Upload
+      <input id="upload" type="file" hidden>
+    </label>
+  </nav>
+
+  <div id="panes">
+    <section id="left">
+      <main id="chat" aria-live="polite"></main>
+      <form id="composer">
+        <textarea id="input" rows="2" placeholder="Message…"></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </section>
+    <aside id="pane">
+      <div id="pane-header">Presentation</div>
+      <div id="pane-body"><p class="pane-empty">Nothing presented yet.</p></div>
+    </aside>
+  </div>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>

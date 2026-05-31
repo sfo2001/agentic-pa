@@ -1,0 +1,26 @@
+[project]
+name = "notes-frontend"
+version = "0.1.0"
+description = "OpenCode proxy + SSE backend for the Chief-of-Staff Notes assistant"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "httpx>=0.27,<1",
+    "python-multipart>=0.0.12,<1",
+    "markitdown>=0.0.1,<0.2",
+    "markdown>=3.6,<4",
+    "nh3>=0.2,<1",
+    "llm-wiki-tools",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["frontend*"]
+
+[tool.setuptools.package-data]
+frontend = ["assets/*.md"]

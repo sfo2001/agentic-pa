@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./agenda -e ./frontend -e ./presenter ruff
+          pip install -r agenda/requirements-dev.txt -r frontend/requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check agenda frontend launcher notes-mvp presenter tests
+
+      - name: Unit tests (pytest)
+        # The end-to-end smoke under tests/smoke/ needs a live model and is not
+        # collected here (it has no test_ functions); only the unit suite runs.
+        run: pytest tests/ -q

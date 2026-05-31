@@ -1,0 +1,3 @@
+(A) Sign off Atlas security design +project-atlas @decision due:2026-06-02 upd:2026-05-29
+(B) Draft Q3 governance proposal +governance t:2026-06-09 upd:2026-05-29
+(C) Reply to vendor on licensing +procurement due:2026-06-01 upd:2026-05-29

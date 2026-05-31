@@ -1,0 +1,21 @@
+[project]
+name = "agenda-service"
+version = "0.1.0"
+description = "Read-only Ground Truth service (agenda views + wiki search) over the local notes"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp>=1.2.0,<2",
+    "pyyaml>=6.0,<7",
+    "llm-wiki-tools",
+]
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["agenda*"]
+
+[project.scripts]
+agenda-server = "agenda.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

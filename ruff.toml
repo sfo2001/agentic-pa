@@ -1,0 +1,11 @@
+# Repo-wide lint config (focused-review F-8) — locks in the existing style and
+# lets CI enforce import order, pyflakes, pyupgrade, and bugbear checks.
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+# E501: line length is advisory (long error strings / signatures); `ruff format`
+# handles wrapping when desired. B008: FastAPI's `param = File(...)`/`Depends(...)`
+# default-argument idiom is intentional, not a bug. Other rules are enforced.
+ignore = ["E501", "B008"]

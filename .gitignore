@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.egg-info/
+*.pyc
+.coverage
+.pytest_cache/
+# Algorithm/session work-tracking artifacts — contain machine-local info; never commit
+MEMORY/
+notes-mvp/opencode.json
+notes-mvp/.env
+notes-mvp/sample-notes/documents/
+# Install-root runtime artifacts (normally outside the repo; safety-net if INSTALL_ROOT points here)
+oc-home/
+notes.git/
+workspace/

@@ -1,0 +1,203 @@
+"""Cross-platform launcher: pre-flight, start OpenCode + the frontend, health-wait, shutdown."""
+from __future__ import annotations
+
+import base64
+import contextlib
+import json
+import os
+import secrets
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+
+def require_tools(names: list[str]) -> list[str]:
+    return [n for n in names if shutil.which(n) is None]
+
+
+def port_is_free(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) != 0
+
+
+def no_git_ancestor(path: Path | str) -> bool:
+    """True iff there is no `.git` at `path` or any ancestor — so OpenCode won't
+    anchor the sandbox boundary to a git work-tree root (ADR-0005)."""
+    p = Path(path).resolve()
+    for d in (p, *p.parents):
+        if (d / ".git").exists():
+            return False
+    return True
+
+
+def isolated_env(install_root: Path | str, base: dict | None = None) -> dict:
+    """Clean HOME/XDG (and Windows %APPDATA%/%LOCALAPPDATA%/%USERPROFILE%) pointed
+    at <install_root>/oc-home, so the user's global ~/.config/opencode config and
+    skill dirs do not merge into the agent. PATH is preserved.
+
+    Also **strips every OPENCODE_* variable** from the inherited environment: the
+    env is a *second* OpenCode config channel (notably `OPENCODE_CONFIG`, which
+    OpenCode merges, not replaces). If the user has such a var set in their shell
+    it would leak into — and could loosen — the sandboxed agent's permission
+    policy. The HOME/XDG isolation closes the file channel; this closes the env
+    channel (ADR-0005 / docs/decisions/D-opencode-sandbox.md §8). The caller adds
+    back only the specific vars the agent needs (e.g. OPENCODE_SERVER_PASSWORD).
+
+    Also **strips dynamic-linker injection variables** (``LD_PRELOAD``,
+    ``LD_LIBRARY_PATH``, ``LD_AUDIT``, ``DYLD_INSERT_LIBRARIES``,
+    ``DYLD_LIBRARY_PATH``) so a user with these set in their shell cannot inject
+    native libraries into the sandboxed OpenCode process (Pattern Q — supply-chain
+    risk, ADR-0005).
+    """
+    env = dict(os.environ if base is None else base)
+    for key in [k for k in env if k.startswith("OPENCODE_")]:
+        del env[key]
+    for k in ("LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH"):
+        env.pop(k, None)
+    oc_home = str(Path(install_root) / "oc-home")
+    env["HOME"] = oc_home
+    env["USERPROFILE"] = oc_home
+    env["XDG_CONFIG_HOME"] = str(Path(oc_home) / ".config")
+    env["XDG_DATA_HOME"] = str(Path(oc_home) / ".local" / "share")
+    env["XDG_STATE_HOME"] = str(Path(oc_home) / ".local" / "state")
+    env["XDG_CACHE_HOME"] = str(Path(oc_home) / ".cache")
+    env["APPDATA"] = str(Path(oc_home) / "AppData" / "Roaming")
+    env["LOCALAPPDATA"] = str(Path(oc_home) / "AppData" / "Local")
+    return env
+
+
+def agenda_server_path(install_root: Path | str) -> str | None:
+    """Read the configured agenda MCP server command from <install_root>/opencode.json.
+    Returns the command path (str) or None if the config is missing/malformed."""
+    try:
+        cfg = json.loads((Path(install_root) / "opencode.json").read_text(encoding="utf-8"))
+        cmd = cfg["mcp"]["notes"]["command"]
+        return cmd[0] if isinstance(cmd, list) else cmd
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
+def _wait_health(url: str, timeout: float = 30.0, password: str | None = None) -> bool:
+    headers = {}
+    if password:
+        token = base64.b64encode(f"opencode:{password}".encode()).decode()
+        headers["Authorization"] = f"Basic {token}"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=2) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.5)
+    return False
+
+
+def main() -> int:
+    install_root = Path(os.environ.get("INSTALL_ROOT", Path.home() / "cos-notes")).resolve()
+    workspace = install_root / "workspace"
+    git_dir = install_root / "notes.git"
+    oc_port = int(os.environ.get("OPENCODE_PORT", "4096"))
+    web_port = int(os.environ.get("WEB_PORT", "8000"))
+
+    # ---- pre-flight -------------------------------------------------------
+    missing = require_tools(["opencode"])
+    if missing:
+        print(f"ERROR: missing required tools on PATH: {', '.join(missing)}", file=sys.stderr)
+        return 2
+    if not workspace.is_dir():
+        print(f"ERROR: {workspace} not found — run bootstrap first.", file=sys.stderr)
+        return 2
+    if not git_dir.is_dir():
+        print(f"ERROR: notes git-dir {git_dir} not found — run bootstrap first.", file=sys.stderr)
+        return 2
+    if not no_git_ancestor(workspace):
+        print(f"ERROR: a .git exists at or above {workspace}; this would expand the agent's "
+              "sandbox boundary to the git work-tree root (ADR-0005). Install outside any git repo.",
+              file=sys.stderr)
+        return 2
+    agenda = agenda_server_path(install_root)
+    if agenda is None:
+        print(f"ERROR: could not read mcp.notes.command from {install_root/'opencode.json'} "
+              "— run bootstrap first.", file=sys.stderr)
+        return 2
+    if not (Path(agenda).is_file() or shutil.which(agenda)):
+        print(f"ERROR: agenda-server not found at '{agenda}' (configured in opencode.json); "
+              "the agent's deterministic agenda tools would fail. Re-run bootstrap.", file=sys.stderr)
+        return 2
+    # NOTE: ports are checked then bound below — a benign check-then-bind (TOCTOU)
+    # race exists, acceptable for a single-user localhost deployment.
+    for p in (oc_port, web_port):
+        if not port_is_free(p):
+            print(f"ERROR: port {p} is in use; free it or set OPENCODE_PORT/WEB_PORT.", file=sys.stderr)
+            return 2
+
+    # A per-run random password authenticates the localhost OpenCode server so
+    # other local processes/users cannot drive the sandboxed agent (design §8).
+    oc_password = secrets.token_urlsafe(32)
+
+    procs: list[subprocess.Popen] = []
+    oc_log = None
+    try:
+        oc_env = isolated_env(install_root)
+        oc_env["OPENCODE_SERVER_PASSWORD"] = oc_password
+        Path(oc_env["HOME"]).mkdir(parents=True, exist_ok=True)
+        # Capture OpenCode's output to a log file (instead of interleaving it with
+        # the launcher's stdout).
+        oc_log = open(install_root / "opencode.log", "ab")
+        procs.append(subprocess.Popen(
+            ["opencode", "serve", "--hostname", "127.0.0.1", "--port", str(oc_port)],
+            cwd=str(workspace), env=oc_env, stdout=oc_log, stderr=oc_log))
+        if not _wait_health(f"http://127.0.0.1:{oc_port}/global/health", password=oc_password):
+            print("ERROR: OpenCode server did not become healthy.", file=sys.stderr)
+            return 3
+        # Frontend env: explicit overrides win over any inherited values. The
+        # frontend (our trusted code) authenticates to OpenCode with the password.
+        env = {**os.environ,
+               "OPENCODE_BASE_URL": f"http://127.0.0.1:{oc_port}",
+               "OPENCODE_SERVER_PASSWORD": oc_password,
+               "NOTES_ROOT": str(workspace),
+               "NOTES_GIT_DIR": str(git_dir)}
+        # uvicorn runs from the active interpreter's venv; `frontend` must be
+        # importable there (the install does `pip install -e ./frontend`).
+        procs.append(subprocess.Popen(
+            [sys.executable, "-m", "uvicorn", "--factory", "frontend.app:build_default_app",
+             "--host", "127.0.0.1", "--port", str(web_port)], env=env))
+        if not _wait_health(f"http://127.0.0.1:{web_port}/health"):
+            print("ERROR: frontend did not become healthy.", file=sys.stderr)
+            return 3
+        print(f"Ready — open http://127.0.0.1:{web_port}/  (Ctrl+C to stop)")
+
+        def _stop(*_):
+            raise KeyboardInterrupt
+
+        signal.signal(signal.SIGINT, _stop)
+        # SIGTERM (docker stop / systemd stop / kill) must also run the finally
+        # block so both child processes are terminated, not orphaned.
+        with contextlib.suppress(ValueError, AttributeError):
+            signal.signal(signal.SIGTERM, _stop)
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nShutting down…")
+    finally:
+        for p in reversed(procs):
+            p.terminate()
+        for p in reversed(procs):
+            try:
+                p.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        if oc_log is not None:
+            oc_log.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
