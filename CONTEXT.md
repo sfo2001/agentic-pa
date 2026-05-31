@@ -104,9 +104,12 @@ it, and there is no separate wiki.
 _Avoid_: "the wiki" (these are conventions on the Ground Truth, not a new store).
 
 **`[[link]]`**:
-A cross-reference from one Ground-Truth page to another by slug. The agent
-*authors* links (judgment); structural lint *validates* them (code).
-_Avoid_: "wikilink", "backlink".
+A cross-reference between **topic and meeting pages**, by the target's bare slug
+(e.g. `[[atlas-migration-sync]]`). The agent *authors* links (judgment); structural
+lint *validates* them (code). Uploaded **documents** are referenced by a plain
+markdown link (`[title](documents/<file>)`), **not** a `[[link]]` — they are files,
+not slug-pages, and orphan/broken-link lint covers only the curated topic+meeting graph.
+_Avoid_: "wikilink", "backlink"; using `[[…]]` for a document or a path-style target.
 
 **Index**:
 The code-owned `index.md` — one line per Ground-Truth page, regenerated and

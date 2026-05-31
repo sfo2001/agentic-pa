@@ -56,17 +56,31 @@ def _autofix_newlines(notes_root: Path) -> None:
         p.write_text(text.rstrip("\n") + "\n", encoding="utf-8")
 
 
+# Orphan/link lint applies to the curated page graph only. Uploaded documents are
+# referenced by markdown links (not [[links]]) and inbox captures are transient, so
+# flagging them as orphans is noise — scope orphan findings to these dirs.
+_CURATED_DIRS = ("topics", "meetings")
+
+
 def run_housekeeping(notes_root: Path | str) -> list[dict]:
     """Regenerate index, auto-fix mechanical lint silently, return judgment findings.
 
     Judgment findings (broken links, orphans, missing-index) are returned as
     {type, path, line, message} for the caller to surface to the agent/user.
+
+    Orphan findings are scoped to the curated topic+meeting graph (see
+    ``_CURATED_DIRS``); broken-link and missing-page findings are returned wherever
+    they occur.
     """
     root = Path(notes_root)
     _autofix_newlines(root)
     regenerate_index(root)
-    return [
-        {"type": f.issue_type, "path": Path(f.path).relative_to(root).as_posix(),
-         "line": f.line, "message": f.message}
-        for f in lint_structural(root)
-    ]
+    findings: list[dict] = []
+    for f in lint_structural(root):
+        rel = Path(f.path).relative_to(root)
+        if f.issue_type == "orphan" and (not rel.parts or rel.parts[0] not in _CURATED_DIRS):
+            continue
+        findings.append(
+            {"type": f.issue_type, "path": rel.as_posix(), "line": f.line, "message": f.message}
+        )
+    return findings

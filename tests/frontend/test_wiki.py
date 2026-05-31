@@ -84,3 +84,20 @@ def test_housekeeping_empty_root(tmp_path):
     findings = run_housekeeping(tmp_path)
     assert findings == []
     assert (tmp_path / "index.md").exists()
+
+
+def test_housekeeping_orphan_findings_scoped_to_curated(tmp_path):
+    for d in ("topics", "documents", "inbox"):
+        (tmp_path / d).mkdir()
+    # a genuinely orphan topic (no inbound [[links]]) — SHOULD be reported
+    (tmp_path / "topics" / "lonely.md").write_text("---\ntitle: Lonely\n---\nno links\n", encoding="utf-8")
+    # a document (referenced by markdown links, not [[links]]) — must NOT be orphan-flagged
+    (tmp_path / "documents" / "doc.md").write_text("---\ntitle: Doc\n---\nbody\n", encoding="utf-8")
+    # a transient inbox capture — must NOT be orphan-flagged
+    (tmp_path / "inbox" / "raw.md").write_text("raw capture\n", encoding="utf-8")
+
+    findings = run_housekeeping(tmp_path)
+
+    assert any(f["type"] == "orphan" and f["path"] == "topics/lonely.md" for f in findings)
+    assert not any(f["type"] == "orphan" and f["path"].startswith("documents/") for f in findings)
+    assert not any(f["type"] == "orphan" and f["path"].startswith("inbox/") for f in findings)
