@@ -80,6 +80,8 @@ See **[`docs/FIRST-RUN.md`](docs/FIRST-RUN.md)** for a fuller walkthrough.
 
 ## Documentation
 
+- **Roadmap:** [`ROADMAP.md`](ROADMAP.md) — what's shipped, what's next, and the
+  trigger for each planned item.
 - **Design (authoritative, Milestone 1):** `mvp-chief-of-staff-notes-design.md`
 - **Glossary:** `CONTEXT.md`
 - **Decisions:** `docs/adr/0001–0005`, `docs/decisions/D-opencode-{http,sandbox}.md`
