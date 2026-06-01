@@ -12,7 +12,7 @@ on:
 # package — dependency confusion), and pinning means a force-push to its default
 # branch can't silently change what CI runs. Bump LWT_REF when its API moves.
 env:
-  LWT_REF: "35f663233b0cdb8b982f51e99b85d214768db5c9"  # lwt-wiki main @ 2026-06-01
+  LWT_REF: "e626bd62b34053a331f8c1e819b4f97232793187"  # lwt-wiki main @ 2026-06-01
 
 jobs:
   lint-and-test:
