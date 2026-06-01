@@ -2,7 +2,7 @@
 name = "notes-frontend"
 version = "0.1.0"
 description = "OpenCode proxy + SSE backend for the Chief-of-Staff Notes assistant"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115,<1",
     "uvicorn>=0.30,<1",

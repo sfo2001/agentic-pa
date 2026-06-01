@@ -36,7 +36,7 @@ see **ADR-0005** and `docs/decisions/D-opencode-sandbox.md`.
 
 ## Quickstart
 
-Requires Python 3.12+, [`opencode`](https://opencode.ai) on `PATH`, an
+Requires Python 3.10+, [`opencode`](https://opencode.ai) on `PATH`, an
 OpenAI-compatible model endpoint (e.g. a local ollama), and
 [`llm-wiki-tools`](https://github.com/sfo2001/llm-wiki-tools) checked out next to
 this repo — it backs document ingest, structural linting, and BM25 search.

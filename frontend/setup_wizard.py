@@ -46,9 +46,9 @@ def check_environment() -> tuple[list[str], list[str]]:
     blocking: list[str] = []
     warnings: list[str] = []
 
-    if sys.version_info < (3, 12):  # noqa: UP036 — runtime guard; the wizard may be run by an older interpreter
+    if sys.version_info < (3, 10):  # noqa: UP036 — runtime guard; the wizard may be run by an older interpreter
         have = ".".join(map(str, sys.version_info[:3]))
-        blocking.append(f"Python 3.12+ is required — this interpreter is {have}.")
+        blocking.append(f"Python 3.10+ is required — this interpreter is {have}.")
 
     # The wizard's own packages must be importable to bootstrap an install.
     for pkg in ("frontend", "agenda"):
@@ -143,7 +143,7 @@ def main() -> int:
         if not _yes("Continue with setup anyway?", default=True):
             return 1
     else:
-        print("Environment looks good (Python 3.12+, packages, opencode, agenda-server).\n")
+        print("Environment looks good (Python 3.10+, packages, opencode, agenda-server).\n")
 
     # Safe to import now that `frontend`/`agenda` are confirmed importable.
     from frontend.bootstrap import init_install

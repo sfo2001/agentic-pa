@@ -2,7 +2,7 @@
 name = "presenter-service"
 version = "0.1.0"
 description = "Thin MCP server: the present(path) UI signal for the Presentation pane"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 dependencies = ["mcp>=1.2.0,<2"]
 
 [project.scripts]

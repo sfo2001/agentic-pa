@@ -1,7 +1,7 @@
 # Repo-wide lint config (focused-review F-8) — locks in the existing style and
 # lets CI enforce import order, pyflakes, pyupgrade, and bugbear checks.
 line-length = 100
-target-version = "py312"
+target-version = "py310"
 
 [lint]
 select = ["E", "F", "I", "UP", "B"]

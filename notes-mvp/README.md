@@ -10,7 +10,7 @@ are tracked.
 ## One-time setup
 
     # 1. Runtime venv for the Agenda MCP server
-    python3.12 -m venv .venv
+    python3 -m venv .venv
     .venv/bin/pip install -e ./agenda          # provides `agenda-server`
 
     # 2. Local config: copy the example, fill in YOUR endpoint + model

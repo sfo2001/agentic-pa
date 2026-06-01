@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 PY="${PYTHON:-python3}"
 if ! command -v "$PY" >/dev/null 2>&1; then
-  echo "ERROR: '$PY' not found. Install Python 3.12+ and re-run (or set PYTHON=…)." >&2
+  echo "ERROR: '$PY' not found. Install Python 3.10+ and re-run (or set PYTHON=…)." >&2
   exit 1
 fi
 

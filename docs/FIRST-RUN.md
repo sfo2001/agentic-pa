@@ -12,7 +12,7 @@ is local; nothing leaves your machine except calls to your own model endpoint.
 
 ## 0. Prerequisites
 
-- **Python 3.12+**
+- **Python 3.10+**
 - **[`opencode`](https://opencode.ai)** on your `PATH` (`opencode --version`)
 - An **OpenAI-compatible model endpoint** — e.g. a local ollama at
   `http://<host>:11434/v1` serving a capable instruct model.

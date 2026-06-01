@@ -2,7 +2,7 @@
 
 ## Environment
 
-- **Python 3.12+. Always use a virtualenv** — never `pip install --break-system-packages`.
+- **Python 3.10+. Always use a virtualenv** — never `pip install --break-system-packages`.
   ```bash
   python3 -m venv .venv && . .venv/bin/activate
   pip install -e ../llm-wiki-tools -e ./agenda -e ./frontend

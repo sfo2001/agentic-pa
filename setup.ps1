@@ -5,7 +5,7 @@ Set-Location $PSScriptRoot
 
 $py = if ($env:PYTHON) { $env:PYTHON } else { "python" }
 if (-not (Get-Command $py -ErrorAction SilentlyContinue)) {
-    Write-Error "Python not found. Install Python 3.12+ and re-run (or set `$env:PYTHON)."
+    Write-Error "Python not found. Install Python 3.10+ and re-run (or set `$env:PYTHON)."
     exit 1
 }
 

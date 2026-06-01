@@ -9,7 +9,7 @@ writes. `search` is BM25 keyword retrieval over the Ground Truth, backed by
 
 ## Install
 
-    python3.12 -m venv .venv
+    python3 -m venv .venv
     .venv/bin/pip install -e ./agenda
 
 ## Test
