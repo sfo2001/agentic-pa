@@ -2,10 +2,24 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 
 CONVERT_EXTS = {".pdf", ".docx", ".pptx"}
+
+
+def _sanitise_basename(name: str) -> str:
+    """Return a markdown-safe basename: no spaces or characters that would break a
+    plain ``[text](path)`` link. Preserves the final extension (lower-cased) and
+    collapses runs of unsafe characters to single hyphens. Falls back to
+    ``upload`` if nothing usable remains. The agent links documents with markdown
+    links, so a space-free name keeps those links valid (see CONTEXT.md).
+    """
+    p = Path(name)
+    stem = re.sub(r"[^A-Za-z0-9._-]+", "-", p.stem).strip("-._")
+    ext = re.sub(r"[^A-Za-z0-9.]+", "", p.suffix).lower()
+    return (stem or "upload") + ext
 
 
 def store_upload(
@@ -30,6 +44,7 @@ def store_upload(
         raise ValueError("upload filename is empty")
     if base in (".", ".."):
         raise ValueError("invalid filename")
+    base = _sanitise_basename(base)
     docs = Path(notes_root) / "documents"
     docs.mkdir(parents=True, exist_ok=True)
 

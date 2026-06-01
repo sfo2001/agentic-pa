@@ -117,8 +117,11 @@ Topic file — `topics/<slug>.md`:
 # Uploaded documents
 Documents the user uploads in the web UI land in `documents/` (NOT `inbox/`), each
 with a Markdown sibling you can read. There is **no `upload/` directory** — never
-look for one. When the user refers to "the document/file I uploaded" or asks to
-follow up on it:
+look for one. The **stored filename may differ** from what the user names it —
+spaces become hyphens and the extension is lower-cased (e.g. `Q3 Budget Memo.PDF`
+is stored as `Q3-Budget-Memo.pdf`). Always `glob`/`list` `documents/` to get the
+**exact** stored name before linking it, rather than guessing from the spoken name.
+When the user refers to "the document/file I uploaded" or asks to follow up on it:
 - read the relevant file under `documents/` (the `.md` sibling),
 - link it from the appropriate topic's `## Documents` section as a **markdown link**
   `[Title](documents/<file>)` (not `[[…]]`),

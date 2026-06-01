@@ -1,6 +1,6 @@
 import pytest
 
-from frontend.upload import lwt_convert, store_upload
+from frontend.upload import _sanitise_basename, lwt_convert, store_upload
 
 CONVERT_EXTS = {".pdf", ".docx", ".pptx"}
 
@@ -92,3 +92,37 @@ def test_lwt_convert_pdf_returns_markdown_with_traceability(tmp_path):
 def test_lwt_convert_unsupported_suffix_raises():
     with pytest.raises(ValueError):
         lwt_convert(b"hello", ".xyz")
+
+
+def test_spaces_sanitised_to_hyphens(tmp_path):
+    result = store_upload(
+        tmp_path,
+        "Benchmarked Qwen3.5 on Apple Silicon and AMD GPUs.md",
+        b"# x\n",
+        convert=_fake_convert,
+    )
+    assert result["stored"] == "documents/Benchmarked-Qwen3.5-on-Apple-Silicon-and-AMD-GPUs.md"
+    assert " " not in result["stored"]
+    assert (
+        tmp_path / "documents" / "Benchmarked-Qwen3.5-on-Apple-Silicon-and-AMD-GPUs.md"
+    ).read_bytes() == b"# x\n"
+
+
+def test_spaced_pdf_sanitised_including_md_sibling(tmp_path):
+    result = store_upload(tmp_path, "Q3 Budget Memo.PDF", b"pdfbytes", convert=_fake_convert)
+    assert result["stored"] == "documents/Q3-Budget-Memo.pdf"  # spaces -> hyphens, ext lower-cased
+    assert result["markdown"] == "documents/Q3-Budget-Memo.pdf.md"
+    assert " " not in result["markdown"]
+    assert (
+        (tmp_path / "documents" / "Q3-Budget-Memo.pdf.md")
+        .read_text(encoding="utf-8")
+        .startswith("converted:.pdf:")
+    )
+
+
+def test_sanitise_basename_edge_cases():
+    assert _sanitise_basename("...") == "upload"          # all-dots -> fallback
+    assert _sanitise_basename("!!!.txt") == "upload.txt"  # garbage stem -> fallback, ext kept
+    assert _sanitise_basename("README.PDF") == "README.pdf"  # ext lower-cased, no spaces
+    assert _sanitise_basename("README") == "README"       # no extension
+    assert _sanitise_basename("a..b.md") == "a..b.md"     # embedded dots preserved (not traversal)
