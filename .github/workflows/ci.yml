@@ -17,6 +17,10 @@ jobs:
       - name: Install packages + dev deps
         run: |
           python -m pip install --upgrade pip
+          # llm-wiki-tools is a sibling project on GitHub, NOT on PyPI. Install it
+          # from its repo (the bare name on PyPI is an unrelated package — dependency
+          # confusion). It backs notes_search and the lwt-based upload converter.
+          pip install "git+https://github.com/sfo2001/llm-wiki-tools.git"
           pip install -e ./agenda -e ./frontend -e ./presenter ruff
           pip install -r agenda/requirements-dev.txt -r frontend/requirements-dev.txt
 

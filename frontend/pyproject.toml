@@ -11,7 +11,10 @@ dependencies = [
     "markitdown>=0.0.1,<0.2",
     "markdown>=3.6,<4",
     "nh3>=0.2,<1",
-    "llm-wiki-tools",
+    # llm-wiki-tools is a sibling project (github.com/sfo2001/llm-wiki-tools), NOT a
+    # PyPI package — install it separately/first (CONTRIBUTING.md, setup.sh, CI). It
+    # is deliberately omitted here: a bare "llm-wiki-tools" resolves to an unrelated
+    # PyPI name (dependency confusion), which is what it must never do.
 ]
 
 [build-system]
