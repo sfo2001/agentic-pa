@@ -89,8 +89,11 @@ def test_bootstrap_registers_present_mcp_server(tmp_path):
     import json
     cfg = json.loads((root / "opencode.json").read_text())
     assert "present" in cfg["mcp"]
-    # derived next to agenda-server in the same venv bin dir
-    assert cfg["mcp"]["present"]["command"] == ["/opt/.venv/bin/present-server"]
+    # derived next to agenda-server in the same venv bin dir (OS-native separators,
+    # so compute the expected path the same way init_install does)
+    from pathlib import Path
+    expected = str(Path("/opt/.venv/bin/agenda-server").parent / "present-server")
+    assert cfg["mcp"]["present"]["command"] == [expected]
     # present tool is allowed by the agent permission policy
     assert cfg["agent"]["workspace-assistant"]["permission"].get("present_*") == "allow"
 

@@ -143,4 +143,5 @@ def test_search_skips_paths_outside_root(tmp_path, monkeypatch):
     monkeypatch.setattr("llm_wiki.search.search", lambda *a, **k: fake)
     paths = [r["path"] for r in server.search("q")]
     assert "topics/ok.md" in paths
-    assert not any(p.startswith("/") or "passwd" in p for p in paths)
+    # is_absolute() (not startswith("/")) so a Windows drive-letter absolute leak is caught too
+    assert not any(Path(p).is_absolute() or "passwd" in p for p in paths)

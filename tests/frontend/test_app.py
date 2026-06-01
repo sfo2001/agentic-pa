@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 
 import httpx
@@ -340,6 +341,11 @@ async def test_inbox_zero_when_no_dir(tmp_path):
 # ── BH-19: Pattern I — inbox endpoint PermissionError → 500 ──────────────────
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="chmod(0o000) has no effect on Windows ACLs, so the PermissionError "
+    "path this test exercises can't be triggered — it would pass vacuously.",
+)
 async def test_bh19_inbox_permission_error_returns_graceful_error(tmp_path):
     """BH-19: GET /api/inbox must return a graceful error (not 500)
     when the inbox/ directory exists but is not readable.
