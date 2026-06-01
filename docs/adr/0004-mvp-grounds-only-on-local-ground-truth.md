@@ -2,7 +2,7 @@
 
 The MVP's sole knowledge source is the local **Ground Truth** — the notes the
 agent maintains — read via native file tools. The external **Grounding Sources**
-defined in *workspace-assistant-spec.md* v0.6 (Confluence, Jira, behind MCP
+defined in *docs/design/workspace-assistant-spec.md* v0.6 (Confluence, Jira, behind MCP
 adapters) are deliberately deferred to the future adapter track.
 
 ## Context

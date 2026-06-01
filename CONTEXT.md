@@ -3,7 +3,7 @@
 The local, sandboxed agentic assistant that triages a leader's day/week and
 maintains a topic-centric body of knowledge from meeting notes. This glossary
 defines the language of the notes layer and its boundary with the inherited
-*workspace-assistant-spec.md* (v0.6) vocabulary.
+*docs/design/workspace-assistant-spec.md* (v0.6) vocabulary.
 
 ## Language
 

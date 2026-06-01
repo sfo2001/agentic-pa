@@ -12,7 +12,7 @@ parses notes, files them, and keeps the topic Ground Truth coherent.
 
 > **Status:** Milestone 1 (local-only MVP) complete. Milestone 2 (external
 > Confluence/Jira grounding, remote workspace, profiles) is the future north-star
-> track — see `workspace-assistant-spec.md`.
+> track — see `docs/design/workspace-assistant-spec.md`.
 
 ## Architecture at a glance
 
@@ -82,10 +82,10 @@ See **[`docs/FIRST-RUN.md`](docs/FIRST-RUN.md)** for a fuller walkthrough.
 
 - **Roadmap:** [`ROADMAP.md`](ROADMAP.md) — what's shipped, what's next, and the
   trigger for each planned item.
-- **Design (authoritative, Milestone 1):** `mvp-chief-of-staff-notes-design.md`
+- **Design (authoritative, Milestone 1):** [`mvp-chief-of-staff-notes-design.md`](docs/design/mvp-chief-of-staff-notes-design.md)
 - **Glossary:** `CONTEXT.md`
 - **Decisions:** `docs/adr/0001–0005`, `docs/decisions/D-opencode-{http,sandbox}.md`
-- **Implementation plan:** `workspace-assistant-implementation-plan.md`
+- **Implementation plan:** [`workspace-assistant-implementation-plan.md`](docs/design/workspace-assistant-implementation-plan.md)
 
 ## Development
 

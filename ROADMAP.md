@@ -51,7 +51,7 @@ Design history: `docs/superpowers/specs/` and `docs/superpowers/plans/`; decisio
 
 The corpus model (one read service per corpus, provenance in every citation) was
 built forward-compatible so these slot in cleanly. Full design:
-`workspace-assistant-spec.md` (v0.6); terminology in `CONTEXT.md`
+`docs/design/workspace-assistant-spec.md` (v0.6); terminology in `CONTEXT.md`
 (**Ground Truth** = local, native-file-read; **Grounding Source** = external,
 read-only, behind an MCP adapter).
 
