@@ -6,19 +6,22 @@ on:
 
 # Third-party actions are pinned to commit SHAs (not floating tags) so a hijacked
 # or re-pointed tag cannot silently swap the action. Trailing comment = the tag.
+#
+# lwt-wiki (sibling project, github.com/sfo2001/llm-wiki-tools) is pinned to a
+# commit SHA too: it's not on PyPI (the bare "llm-wiki-tools" name is an unrelated
+# package — dependency confusion), and pinning means a force-push to its default
+# branch can't silently change what CI runs. Bump LWT_REF when its API moves.
+env:
+  LWT_REF: "35f663233b0cdb8b982f51e99b85d214768db5c9"  # lwt-wiki main @ 2026-06-01
+
 jobs:
   lint-and-test:
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest]
-        python-version: ["3.10", "3.11", "3.12"]
-        # Catch Windows-specific failures on the primary Python (one job is enough;
-        # OS issues rarely depend on the minor version).
-        include:
-          - os: windows-latest
-            python-version: "3.12"
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     defaults:
       run:
         # Use bash on every OS (Git Bash on Windows) so the install/test steps are
@@ -30,14 +33,20 @@ jobs:
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            agenda/pyproject.toml
+            frontend/pyproject.toml
+            presenter/pyproject.toml
+            agenda/requirements-dev.txt
+            frontend/requirements-dev.txt
 
       - name: Install packages + dev deps
         run: |
           python -m pip install --upgrade pip
-          # llm-wiki-tools is a sibling project on GitHub, NOT on PyPI. Install it
-          # from its repo (the bare name on PyPI is an unrelated package — dependency
-          # confusion). It backs notes_search and the lwt-based upload converter.
-          pip install "git+https://github.com/sfo2001/llm-wiki-tools.git"
+          # lwt-wiki backs notes_search and the lwt-based upload converter. Installed
+          # from its GitHub repo at a pinned SHA (see header).
+          pip install "git+https://github.com/sfo2001/llm-wiki-tools.git@${LWT_REF}"
           pip install -e ./agenda -e ./frontend -e ./presenter ruff
           pip install -r agenda/requirements-dev.txt -r frontend/requirements-dev.txt
 
@@ -48,3 +57,28 @@ jobs:
         # The end-to-end smoke under tests/smoke/ needs a live model and is not
         # collected here (it has no test_ functions); only the unit suite runs.
         run: pytest tests/ -q
+
+  audit:
+    runs-on: ubuntu-latest
+    # Non-blocking: surfaces known CVEs (including transitive deps we don't directly
+    # control) as a warning without gating merges. Flip to a hard gate by removing
+    # continue-on-error once the dependency tree is clean.
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Audit installed dependencies for known vulnerabilities
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip install "git+https://github.com/sfo2001/llm-wiki-tools.git@${LWT_REF}"
+          pip install -e ./agenda -e ./frontend -e ./presenter
+          # --skip-editable: don't probe PyPI for the local (unpublished) packages.
+          pip-audit --skip-editable
