@@ -1,6 +1,6 @@
 [project]
 name = "notes-frontend"
-version = "0.1.0"
+dynamic = ["version"]
 description = "OpenCode proxy + SSE backend for the Chief-of-Staff Notes assistant"
 requires-python = ">=3.10"
 dependencies = [
@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
@@ -27,3 +27,9 @@ include = ["frontend*"]
 
 [tool.setuptools.package-data]
 frontend = ["assets/*.md"]
+
+[tool.setuptools_scm]
+# One version for the whole monorepo, from the repo's git tags (root="..", subdir
+# pyproject); no-local-version drops the +g<hash> suffix.
+root = ".."
+local_scheme = "no-local-version"

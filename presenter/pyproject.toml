@@ -1,6 +1,6 @@
 [project]
 name = "presenter-service"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Thin MCP server: the present(path) UI signal for the Presentation pane"
 requires-python = ">=3.10"
 dependencies = ["mcp>=1.2.0,<2"]
@@ -9,9 +9,15 @@ dependencies = ["mcp>=1.2.0,<2"]
 present-server = "presenter.server:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = [".."]
 include = ["presenter*"]
+
+[tool.setuptools_scm]
+# One version for the whole monorepo, from the repo's git tags (root="..", subdir
+# pyproject); no-local-version drops the +g<hash> suffix.
+root = ".."
+local_scheme = "no-local-version"

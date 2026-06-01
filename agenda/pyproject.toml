@@ -1,6 +1,6 @@
 [project]
 name = "agenda-service"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Read-only Ground Truth service (agenda views + wiki search) over the local notes"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,5 +20,12 @@ include = ["agenda*"]
 agenda-server = "agenda.server:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+# One version for the whole monorepo, derived from the repo's git tags. root=".."
+# because this pyproject lives in a subdir of the repo root; no-local-version drops
+# the +g<hash> suffix (matches the lwt-wiki convention).
+root = ".."
+local_scheme = "no-local-version"
