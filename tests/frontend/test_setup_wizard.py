@@ -215,3 +215,15 @@ def test_choose_model_typed_id_overrides_list(monkeypatch):
     monkeypatch.setattr(setup_wizard, "fetch_models", lambda *a, **k: ["m-a", "m-b"])
     monkeypatch.setattr(setup_wizard, "_prompt", lambda *a, **k: "custom-id")
     assert setup_wizard._choose_model("http://x/v1") == "custom-id"
+
+
+def test_launch_command_posix_uses_run_sh():
+    cmd = setup_wizard.launch_command("/home/u/cos-notes", windows=False)
+    assert cmd == "INSTALL_ROOT=/home/u/cos-notes ./run.sh"
+
+
+def test_launch_command_windows_uses_run_cmd():
+    cmd = setup_wizard.launch_command(r"C:\Users\u\cos-notes", windows=True)
+    # cmd.exe sets env on a separate line, then runs the batch shim — assert the
+    # exact two-line shape so a single-line/swapped-token regression is caught.
+    assert cmd == "set INSTALL_ROOT=" + r"C:\Users\u\cos-notes" + "\n  run.cmd"

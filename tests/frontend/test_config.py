@@ -80,3 +80,20 @@ def test_permission_allows_notes_tools():
     assert perms["notes_*"] == "allow"
     assert "agenda_*" not in perms
     assert perms["bash"] == "deny"  # sandbox unchanged
+
+
+def test_mcp_pythonpath_baked_into_both_servers_when_given():
+    # Target mode (venv-less): the MCP children are spawned by OpenCode, so they
+    # must be self-sufficient — PYTHONPATH=.pysite baked into both servers'
+    # environment rather than relying on ambient process inheritance.
+    cfg = _cfg(mcp_pythonpath="/repo/.pysite")
+    assert cfg["mcp"]["notes"]["environment"]["PYTHONPATH"] == "/repo/.pysite"
+    assert cfg["mcp"]["notes"]["environment"]["NOTES_ROOT"] == "/n"
+    assert cfg["mcp"]["present"]["environment"]["PYTHONPATH"] == "/repo/.pysite"
+
+
+def test_mcp_pythonpath_absent_by_default():
+    # venv mode: nothing baked; present keeps no environment block (output parity).
+    cfg = _cfg()
+    assert "PYTHONPATH" not in cfg["mcp"]["notes"]["environment"]
+    assert "environment" not in cfg["mcp"]["present"]

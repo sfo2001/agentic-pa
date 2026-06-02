@@ -1,9 +1,11 @@
 .venv/
+.pysite/
 __pycache__/
 *.egg-info/
 *.pyc
 .coverage
 .pytest_cache/
+build/
 # Algorithm/session work-tracking artifacts — contain machine-local info; never commit
 MEMORY/
 notes-mvp/opencode.json

@@ -39,6 +39,7 @@ def build_opencode_config(
     python_executable: str,
     prompt_path: str,
     api_key: str | None = None,
+    mcp_pythonpath: str | None = None,
 ) -> dict:
     """Build and return the opencode.json config dict.
 
@@ -72,6 +73,13 @@ def build_opencode_config(
             robustness (see the module constants above).
         prompt_path: Absolute path to the ``notes-agent.md`` system prompt,
             embedded as ``{file:<path>}`` in the agent config.
+        mcp_pythonpath: When set (target/venv-less mode), the absolute path baked
+            as ``PYTHONPATH`` into BOTH MCP servers' ``environment`` so OpenCode's
+            ``<python> -m <module>`` MCP children are self-sufficient — they
+            import the packages from ``.pysite`` directly rather than depending on
+            ``PYTHONPATH`` being inherited down the launch chain. ``None`` (venv
+            mode) leaves the config untouched: the venv interpreter already has
+            the packages, and ``present`` keeps no ``environment`` block.
     """
     permissions = {
         "bash": "deny",
@@ -93,6 +101,21 @@ def build_opencode_config(
     options = {"baseURL": model_endpoint}
     if not api_key:
         options["apiKey"] = "local"
+    # Target mode bakes PYTHONPATH into each MCP server's environment so the
+    # OpenCode-spawned `python -m <module>` children are self-sufficient; venv
+    # mode leaves both untouched (present keeps no environment block).
+    notes_env = {"NOTES_ROOT": notes_root}
+    present_env: dict = {}
+    if mcp_pythonpath:
+        notes_env["PYTHONPATH"] = mcp_pythonpath
+        present_env["PYTHONPATH"] = mcp_pythonpath
+    present_server = {
+        "type": "local",
+        "command": [python_executable, "-m", PRESENT_SERVER_MODULE],
+        "enabled": True,
+    }
+    if present_env:
+        present_server["environment"] = present_env
     return {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
@@ -119,12 +142,8 @@ def build_opencode_config(
                 "type": "local",
                 "command": [python_executable, "-m", AGENDA_SERVER_MODULE],
                 "enabled": True,
-                "environment": {"NOTES_ROOT": notes_root},
+                "environment": notes_env,
             },
-            "present": {
-                "type": "local",
-                "command": [python_executable, "-m", PRESENT_SERVER_MODULE],
-                "enabled": True,
-            },
+            "present": present_server,
         },
     }

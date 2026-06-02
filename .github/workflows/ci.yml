@@ -53,7 +53,7 @@ jobs:
           pip install -r agenda/requirements-dev.txt -r frontend/requirements-dev.txt
 
       - name: Lint (ruff)
-        run: ruff check agenda frontend launcher notes-mvp presenter tests
+        run: ruff check agenda frontend launcher notes-mvp presenter tests bootstrap_env.py install.py launch.py
 
       - name: Unit tests (pytest)
         # The end-to-end smoke under tests/smoke/ needs a live model and is not

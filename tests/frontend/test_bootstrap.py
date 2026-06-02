@@ -20,6 +20,22 @@ def test_install_gitignores_lwt_caches(tmp_path):
     assert ".tmp/" in gi
 
 
+def test_mcp_pythonpath_threaded_into_opencode_json(tmp_path):
+    # Target mode: init_install forwards mcp_pythonpath so the generated
+    # opencode.json bakes PYTHONPATH into the MCP servers (self-sufficient spawn).
+    root = tmp_path / "cos-notes"
+    bootstrap.init_install(
+        root,
+        model_endpoint="http://example:11434/v1",
+        model_id="test-model",
+        python_executable="/opt/.venv/bin/python",
+        mcp_pythonpath="/repo/.pysite",
+    )
+    cfg = json.loads((root / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["mcp"]["notes"]["environment"]["PYTHONPATH"] == "/repo/.pysite"
+    assert cfg["mcp"]["present"]["environment"]["PYTHONPATH"] == "/repo/.pysite"
+
+
 def test_install_gitignore_appends_to_existing(tmp_path):
     """Re-install over a pre-existing .gitignore appends the lwt entries
     without clobbering existing content (idempotent, not create-only)."""

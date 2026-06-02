@@ -93,6 +93,7 @@ def init_install(
     model_id: str,
     python_executable: str,
     api_key: str | None = None,
+    mcp_pythonpath: str | None = None,
 ) -> dict:
     """Create (or verify) the Chief-of-Staff Notes install layout.
 
@@ -108,6 +109,10 @@ def init_install(
             auth.json under oc-home (mode 600) and deliberately OMITTED from
             opencode.json — an inline ``options.apiKey`` would shadow the
             auth.json credential (see ``frontend.config.build_opencode_config``).
+        mcp_pythonpath: Target/venv-less mode only — absolute ``.pysite`` path
+            baked as ``PYTHONPATH`` into the generated MCP server environments so
+            OpenCode's ``python -m`` MCP children are self-sufficient. ``None``
+            (venv mode) leaves the config untouched.
 
     Returns:
         A dict with keys ``install_root``, ``workspace``, ``git_dir``,
@@ -189,6 +194,7 @@ def init_install(
         python_executable=python_executable,
         prompt_path=str(prompt_dest),
         api_key=api_key,
+        mcp_pythonpath=mcp_pythonpath,
     )
     opencode_json = root / "opencode.json"
     opencode_json.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")

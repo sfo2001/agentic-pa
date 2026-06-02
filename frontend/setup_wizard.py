@@ -1,6 +1,6 @@
 """Interactive setup wizard for the Chief-of-Staff Notes assistant.
 
-Run via the cross-platform wrappers (`./setup.sh` or `setup.ps1`), which create a
+Run via the cross-platform wrappers (`./setup.sh` or `setup.cmd`), which create a
 venv and install the packages first, or directly with `python -m frontend.setup_wizard`.
 
 It (1) checks the Python environment and external tools and gives actionable advice
@@ -210,6 +210,14 @@ def _choose_model(endpoint: str, api_key: str | None = None) -> str:
             return sel
 
 
+def launch_command(install_root: str, *, windows: bool) -> str:
+    """The recommended start command, using the run-shim so the right interpreter
+    and PYTHONPATH are resolved (works in both venv and target mode)."""
+    if windows:
+        return f"set INSTALL_ROOT={install_root}\n  run.cmd"
+    return f"INSTALL_ROOT={install_root} ./run.sh"
+
+
 def main() -> int:
     print("=== Chief-of-Staff Notes — setup ===\n")
 
@@ -252,12 +260,23 @@ def main() -> int:
     # frontend.config). Using sys.executable avoids resolving a console-script
     # path — robust on Windows where the .exe lives in a Scripts dir that may be
     # off PATH (base/`--user` installs) or blocked by AppLocker/SRP.
+    # In target/venv-less mode install.py exports COS_PYSITE (the absolute
+    # .pysite path); pass it through so the generated opencode.json bakes
+    # PYTHONPATH into the MCP servers, making OpenCode's `python -m` children
+    # self-sufficient instead of relying on inherited env. Unset in venv mode.
+    # COS_PYSITE is an internal handoff from install.py (the absolute .pysite
+    # path). Ignore a malformed/relative value rather than baking an arbitrary
+    # PYTHONPATH into the generated opencode.json.
+    cos_pysite = os.environ.get("COS_PYSITE") or None
+    if cos_pysite and not Path(cos_pysite).is_absolute():
+        cos_pysite = None
     layout = init_install(
         install_root,
         model_endpoint=endpoint,
         model_id=model_id,
         python_executable=sys.executable,
         api_key=api_key,
+        mcp_pythonpath=cos_pysite,
     )
     print(f"  ✓ workspace:    {layout['workspace']}")
     print(f"  ✓ config:       {layout['opencode_json']}  (machine-specific, not committed)")
@@ -265,10 +284,10 @@ def main() -> int:
     if layout.get("auth_json"):
         print(f"  ✓ api key:      {layout['auth_json']}  (OpenCode auth.json, mode 600)")
 
-    # Use THIS interpreter (the venv's python that ran the wizard) — a bare
-    # `python`/`python3` would pick the system interpreter, which doesn't have the
-    # packages we just installed into the venv.
-    run_cmd = f"INSTALL_ROOT={install_root} {sys.executable} -m launcher.run"
+    # Recommend the run-shim: it resolves the interpreter (venv python if it runs,
+    # else a base interpreter + PYTHONPATH=.pysite for AppLocker-restricted boxes),
+    # so the same instruction works regardless of install mode.
+    run_cmd = launch_command(str(install_root), windows=(os.name == "nt"))
     print("\nDone. Start the assistant with:\n")
     print(f"  {run_cmd}")
     print("\nthen open http://127.0.0.1:8000/  — see docs/FIRST-RUN.md for daily use.")

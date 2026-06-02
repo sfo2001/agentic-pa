@@ -56,7 +56,7 @@ your environment, then runs an interactive wizard that prompts for your endpoint
 
 ```bash
 ./setup.sh                       # Linux/macOS
-# powershell -ExecutionPolicy Bypass -File setup.ps1   # Windows
+setup.cmd                        # Windows (cmd.exe or PowerShell)
 ```
 
 **Manual** (equivalent to what the wizard does):

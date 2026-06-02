@@ -16,7 +16,7 @@
 ## Quality gates (must pass before merge)
 
 ```bash
-ruff check agenda frontend launcher notes-mvp tests
+ruff check agenda frontend launcher notes-mvp presenter tests bootstrap_env.py install.py launch.py
 pytest tests/ -q
 ```
 CI runs both on every push and PR (`.github/workflows/ci.yml`). The end-to-end

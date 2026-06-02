@@ -6,6 +6,24 @@ shuts them down cleanly on Ctrl+C.
 
 ## Quick start
 
+**Recommended — use the run shims.** They resolve the correct interpreter
+(venv python if the venv's binary runs, else base interpreter +
+`PYTHONPATH=.pysite`) and then delegate to `launcher/run.py`:
+
+```bash
+# Linux / macOS
+INSTALL_ROOT=~/cos-notes ./run.sh
+
+# Windows, cmd.exe (works under Group Policy execution restrictions)
+set INSTALL_ROOT=<install-root> && run.cmd
+
+# Windows, PowerShell (.cmd runs fine from a PS prompt — no .ps1 needed)
+$env:INSTALL_ROOT="<install-root>"; .\run.cmd
+```
+
+`launcher/run.py` itself is unchanged; you can still invoke it directly when
+you know the venv python is available and you want minimal indirection:
+
 ```
 python launcher/run.py
 ```
@@ -20,6 +38,8 @@ first so that `<INSTALL_ROOT>/workspace/` exists.
 | `INSTALL_ROOT` | `~/cos-notes` | Root of the installed notes tree. `workspace/` and `notes.git` live inside here. |
 | `OPENCODE_PORT` | `4096` | Port for the OpenCode server (`opencode serve`). |
 | `WEB_PORT` | `8000` | Port for the FastAPI frontend (uvicorn). |
+| `PYTHON` | `py`/`python3` | Override the base interpreter the `setup.*` / `run.*` shims use before handing off to `install.py` / `launch.py`. |
+| `SETUP_MODE` | _(unset)_ | Set to `target` to force the venv-less `pip install --target .pysite` install path (e.g. on an AppLocker-restricted Windows box). Read by the `setup.*` shims. |
 
 ## Pre-flight checks (abort if any fail)
 
@@ -80,8 +100,10 @@ then OpenCode). Each gets 10 seconds to exit gracefully before `SIGKILL`.
 
 ## Notes
 
-- This is a pure-Python launcher; no PowerShell or shell scripts are used.
-  On Windows it works the same way (replace `python` with `py` if needed).
+- `launcher/run.py` itself is pure Python and cross-platform. The thin
+  `run.sh`/`run.cmd` shims (see Quick start) only resolve the interpreter (venv
+  python, or a base interpreter + `PYTHONPATH=.pysite`) before delegating to it —
+  `run.py`'s own logic is unchanged on every platform.
 - The split git-dir (`<install-root>/notes.git`) is passed to the frontend
   via `NOTES_GIT_DIR` so that there is no `.git` inside `workspace/` itself,
   consistent with the ADR-0005 sandbox requirement.
