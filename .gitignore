@@ -8,6 +8,9 @@ __pycache__/
 build/
 # Algorithm/session work-tracking artifacts — contain machine-local info; never commit
 MEMORY/
+# Brainstorming / writing-plans process artifacts — not project documentation;
+# the durable record lives in docs/adr/ and docs/decisions/.
+docs/superpowers/
 notes-mvp/opencode.json
 notes-mvp/.env
 notes-mvp/sample-notes/documents/

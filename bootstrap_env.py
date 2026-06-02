@@ -7,7 +7,7 @@ root* (``~/cos-notes``) holds runtime data and is not this module's concern.
 The target mode exists for locked-down Windows where AppLocker/SRP blocks
 executing the venv's ``python.exe`` — we never run a venv exe, only a base
 interpreter + ``PYTHONPATH`` pointed at ``.pysite`` (see
-docs/superpowers/specs/2026-06-02-venv-fallback-launcher-design.md).
+docs/adr/0008-venv-fallback-target-mode.md).
 """
 from __future__ import annotations
 

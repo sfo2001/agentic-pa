@@ -248,8 +248,7 @@ therefore correct. The **integration smoke** (`tests/smoke/notes-mvp/run_smoke.p
 `_consume_sse`) reads the frontend's `/api/events` with raw `http.client`, which
 drops the chunked stream early and reports 0 browser events — a **test-harness
 defect, not a product defect**. Fix: rewrite `_consume_sse` to use `httpx`
-streaming (already a dependency). See the follow-up in
-`docs/superpowers/plans/2026-05-30-launcher-and-integration.md`.
+streaming (already a dependency).
 
 **Workspace routing.** The `/event` route carries `WorkspaceRoutingMiddleware`, but
 `GET /event` (no query) and `GET /event?directory=<workspace>` delivered an

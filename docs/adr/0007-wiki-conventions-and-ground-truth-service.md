@@ -86,6 +86,5 @@ Two constraints shape *where* each capability can live:
 
 ## References
 
-- Design spec: `docs/superpowers/specs/2026-05-31-llm-wiki-integration-design.md`
 - Builds on ADR-0001 (deterministic engine), ADR-0002 (task authority),
   ADR-0003 (frontend owns git), ADR-0005 (sandbox), ADR-0006 (read-server purity).

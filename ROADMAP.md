@@ -41,7 +41,7 @@ capability is worth adding.
 | 2026-05-31 | **Presentation pane** (ADR-0006) — a `present_present(path)` MCP signal renders a workspace Artifact read-only beside the conversation, server-side sanitized. |
 | (M1) | **Local-only MVP** — topic-centric Ground Truth, deterministic Agenda engine (read-only MCP), sandboxed OpenCode agent, frontend proxy + notes git versioning, one-command launcher. ADRs 0001–0005. |
 
-Design history: `docs/superpowers/specs/` and `docs/superpowers/plans/`; decisions in `docs/adr/`.
+Architecture decisions are recorded in `docs/adr/`.
 
 ---
 
