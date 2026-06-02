@@ -5,6 +5,7 @@ import base64
 import contextlib
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -14,6 +15,12 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+
+# A valid dotted Python module name (e.g. "agenda.server"). The MCP module is
+# read from a machine-local opencode.json we generate, but validating it before
+# interpolating into `python -c "import <module>"` keeps a hand-edited config
+# from turning the preflight into an arbitrary-code-execution vector.
+_MODULE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
 
 
 def require_tools(names: list[str]) -> list[str]:
@@ -71,15 +78,56 @@ def isolated_env(install_root: Path | str, base: dict | None = None) -> dict:
     return env
 
 
-def agenda_server_path(install_root: Path | str) -> str | None:
-    """Read the configured agenda MCP server command from <install_root>/opencode.json.
-    Returns the command path (str) or None if the config is missing/malformed."""
+def notes_mcp_command(install_root: Path | str) -> list[str] | None:
+    """Read the full ``mcp.notes.command`` argv from <install_root>/opencode.json.
+
+    Returns the command list (e.g. ``[python, "-m", "agenda.server"]``), or None
+    if the config is missing/malformed or the command is empty."""
     try:
         cfg = json.loads((Path(install_root) / "opencode.json").read_text(encoding="utf-8"))
         cmd = cfg["mcp"]["notes"]["command"]
-        return cmd[0] if isinstance(cmd, list) else cmd
-    except (OSError, ValueError, KeyError, IndexError, TypeError):
+    except (OSError, ValueError, KeyError, TypeError):
         return None
+    return cmd if isinstance(cmd, list) and cmd else None
+
+
+def agenda_server_path(install_root: Path | str) -> str | None:
+    """First token of the notes MCP command — the interpreter for the
+    ``python -m`` form, or a bare exe path for the legacy form. None if the
+    config is missing/malformed. Kept as the stable command[0] accessor."""
+    cmd = notes_mcp_command(install_root)
+    return cmd[0] if cmd else None
+
+
+def _python_m_module(cmd: list[str]) -> str | None:
+    """Module name if *cmd* is a ``<python> -m <module>`` invocation, else None.
+
+    Localizes the one place that knows the ``-m`` argv shape, so the preflight
+    reads as intent ("is this a python -m command?") rather than index math."""
+    if len(cmd) >= 3 and cmd[1] == "-m":
+        return cmd[2]
+    return None
+
+
+def _module_importable(interpreter: str, module: str) -> bool:
+    """True iff *interpreter* can ``import <module>`` — validates a ``python -m``
+    MCP command will actually start (catches a broken/missing install early).
+
+    Rejects a malformed module name before spawning, so a tampered opencode.json
+    can't smuggle code into the ``-c`` string (fail closed)."""
+    # fullmatch (NOT re.match) is load-bearing: match() anchors only the start, so
+    # ``$`` would accept "agenda.server\nimport os" — fullmatch rejects any
+    # trailing payload. Do not weaken this to match().
+    if not _MODULE_NAME_RE.fullmatch(module):
+        return False
+    try:
+        return subprocess.run(
+            [interpreter, "-c", f"import {module}"],
+            capture_output=True, timeout=10,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        # SubprocessError covers TimeoutExpired (a hung import) — fail closed.
+        return False
 
 
 def _wait_health(url: str, timeout: float = 30.0, password: str | None = None) -> bool:
@@ -122,15 +170,31 @@ def main() -> int:
               "sandbox boundary to the git work-tree root (ADR-0005). Install outside any git repo.",
               file=sys.stderr)
         return 2
-    agenda = agenda_server_path(install_root)
-    if agenda is None:
+    notes_cmd = notes_mcp_command(install_root)
+    if notes_cmd is None:
         print(f"ERROR: could not read mcp.notes.command from {install_root/'opencode.json'} "
               "— run bootstrap first.", file=sys.stderr)
         return 2
-    if not (Path(agenda).is_file() or shutil.which(agenda)):
-        print(f"ERROR: agenda-server not found at '{agenda}' (configured in opencode.json); "
-              "the agent's deterministic agenda tools would fail. Re-run bootstrap.", file=sys.stderr)
+    interpreter = notes_cmd[0]
+    if not (Path(interpreter).is_file() or shutil.which(interpreter)):
+        print(f"ERROR: MCP notes command interpreter '{interpreter}' not found "
+              "(configured in opencode.json). Re-run bootstrap.", file=sys.stderr)
         return 2
+    # For the `python -m <module>` form, confirm the module imports under that
+    # interpreter — otherwise a broken/missing agenda install would only surface
+    # later when OpenCode spawns the MCP server.
+    module = _python_m_module(notes_cmd)
+    if module and not _module_importable(interpreter, module):
+        print(f"ERROR: MCP notes module '{module}' is not importable by "
+              f"'{interpreter}'; the agent's deterministic agenda tools would fail. "
+              "Reinstall the agenda package and re-run bootstrap.", file=sys.stderr)
+        return 2
+    # Deliberately NOT hard-gating the `present` MCP module here. Notes is
+    # load-bearing (the agent's deterministic agenda tools) so a broken install
+    # must abort; the presentation pane is optional and degrades gracefully
+    # (ADR-0006) — OpenCode runs without it, and the wizard's check_environment
+    # already warns at install time if `presenter` isn't importable. Adding a
+    # second per-launch subprocess probe for an optional component isn't worth it.
     # NOTE: ports are checked then bound below — a benign check-then-bind (TOCTOU)
     # race exists, acceptable for a single-user localhost deployment.
     for p in (oc_port, web_port):

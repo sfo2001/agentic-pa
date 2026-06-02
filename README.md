@@ -69,7 +69,8 @@ pip install -r agenda/requirements-dev.txt -r frontend/requirements-dev.txt
 # Bootstrap an install (config/secrets/git live OUTSIDE the agent sandbox):
 python -c "from frontend.bootstrap import init_install; \
 init_install('$HOME/cos-notes', model_endpoint='http://<host>:11434/v1', \
-model_id='<model-id>', agenda_server='$PWD/.venv/bin/agenda-server')"
+model_id='<model-id>', python_executable='$PWD/.venv/bin/python')"
+# The MCP servers are spawned via `python -m` using that interpreter (Windows-robust).
 # If your endpoint requires a key, add api_key='sk-...' — it is stored in
 # OpenCode's auth.json (oc-home, mode 600), not in opencode.json.
 

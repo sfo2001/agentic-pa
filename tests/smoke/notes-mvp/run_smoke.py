@@ -13,7 +13,7 @@ must not carry machine-specific hosts or model ids).
 Prerequisites:
   - opencode is on PATH (``which opencode``)
   - The model endpoint is reachable and the model is loaded
-  - agenda-server is available (in the venv or on PATH)
+  - agenda and presenter are importable under the venv interpreter (`python -m` spawn)
   - The frontend and launcher packages are importable (run from the repo root
     with the venv active, or PYTHONPATH set accordingly)
 
@@ -91,22 +91,6 @@ def _find_free_port(start: int) -> int:
         if port_is_free(p):
             return p
     raise RuntimeError(f"No free port found in range {start}–{start + 99}")
-
-
-def _locate_agenda_server() -> str:
-    """Return the absolute path to the agenda-server executable."""
-    # Prefer the entry point in the same venv as the running interpreter.
-    venv_bin = Path(sys.executable).parent
-    candidate = venv_bin / "agenda-server"
-    if candidate.is_file():
-        return str(candidate)
-    found = shutil.which("agenda-server")
-    if found:
-        return found
-    raise RuntimeError(
-        "agenda-server not found. Install the project venv first:\n"
-        "  pip install -e '.[dev]'  (or similar)"
-    )
 
 
 def _get_json(url: str, timeout: float = 10.0) -> dict:
@@ -211,12 +195,9 @@ def run_smoke() -> int:
         return 1
     print(f"  opencode: {shutil.which('opencode')}", flush=True)
 
-    try:
-        agenda_server = _locate_agenda_server()
-    except RuntimeError as exc:
-        print(f"  [{FAIL}] {exc}", flush=True)
-        return 1
-    print(f"  agenda-server: {agenda_server}", flush=True)
+    # MCP servers run as `python -m <module>` using this interpreter (frontend.config).
+    python_executable = sys.executable
+    print(f"  interpreter: {python_executable}", flush=True)
 
     # ------------------------------------------------------------------
     # 2. Throwaway install root in /tmp
@@ -229,7 +210,7 @@ def run_smoke() -> int:
             install_root,
             model_endpoint=MODEL_ENDPOINT,
             model_id=MODEL_ID,
-            agenda_server=agenda_server,
+            python_executable=python_executable,
         )
     except RuntimeError as exc:
         print(f"  [{FAIL}] init_install failed: {exc}", flush=True)

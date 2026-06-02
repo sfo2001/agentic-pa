@@ -38,6 +38,20 @@ def test_check_environment_flags_missing_runtime_package_as_warning(monkeypatch)
     assert any("markitdown" in w for w in warnings)
 
 
+def test_check_environment_warns_when_presenter_missing(monkeypatch):
+    # The present MCP server runs as `python -m presenter.server`; if presenter
+    # isn't importable the wizard must warn (not block — notes still works).
+    real = importlib.util.find_spec
+
+    def fake(name, *a, **k):
+        return None if name == "presenter" else real(name, *a, **k)
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake)
+    blocking, warnings = setup_wizard.check_environment()
+    assert blocking == []  # missing presenter is a warning, not blocking
+    assert any("presenter" in w for w in warnings)
+
+
 def test_check_environment_blocks_when_core_package_missing(monkeypatch):
     real = importlib.util.find_spec
 

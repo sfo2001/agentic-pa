@@ -26,7 +26,9 @@ pip install -e ./agenda -e ./frontend -e ./presenter
 pip install -r agenda/requirements-dev.txt -r frontend/requirements-dev.txt
 ```
 
-`agenda-server` is now on the venv's `PATH` (`which agenda-server`).
+`agenda` and `presenter` are now importable under this interpreter
+(`python -c "import agenda.server, presenter.server"`) — the MCP servers are
+spawned via `python -m`, not console-script executables.
 
 ## 2. Bootstrap an install root (OUTSIDE any git repo)
 
@@ -36,13 +38,14 @@ launcher refuses to start otherwise — see ADR-0005). `~/cos-notes` is a good s
 
 ```bash
 python - <<'PY'
+import sys
 from frontend.bootstrap import init_install
 from pathlib import Path
 layout = init_install(
     Path.home() / "cos-notes",
     model_endpoint="http://<your-host>:11434/v1",   # your model endpoint
     model_id="<your-model-id>",                      # e.g. a 64k-context instruct model
-    agenda_server=str(Path(".venv/bin/agenda-server").resolve()),
+    python_executable=sys.executable,               # spawns the MCP servers via `python -m`
     # api_key="sk-...",   # only if your endpoint requires auth (omit for Ollama/local)
 )
 print("installed:", layout["install_root"])
@@ -75,7 +78,8 @@ INSTALL_ROOT=$HOME/cos-notes .venv/bin/python launcher/run.py
 ```
 
 The launcher pre-flights (tools present, `notes.git` exists, no `.git` above
-`workspace/`, `agenda-server` resolvable, ports free), generates a per-run server
+`workspace/`, the notes MCP interpreter present + `agenda` importable, ports free),
+generates a per-run server
 password, isolates the agent's HOME/XDG + env, starts OpenCode and the frontend,
 and waits for both to be healthy. OpenCode's log goes to
 `~/cos-notes/opencode.log`. Override ports with `OPENCODE_PORT` / `WEB_PORT`.

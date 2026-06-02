@@ -13,7 +13,7 @@ def test_install_gitignores_lwt_caches(tmp_path):
         root,
         model_endpoint="http://example:11434/v1",
         model_id="test-model",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
     )
     gi = (root / "workspace" / ".gitignore").read_text(encoding="utf-8")
     assert ".lwt_cache/" in gi
@@ -31,7 +31,7 @@ def test_install_gitignore_appends_to_existing(tmp_path):
         root,
         model_endpoint="http://example:11434/v1",
         model_id="test-model",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
     )
     gi = (ws / ".gitignore").read_text(encoding="utf-8")
     assert "secrets.txt" in gi          # preserved
@@ -46,7 +46,7 @@ def test_no_auth_json_when_keyless(tmp_path):
         root,
         model_endpoint="http://example:11434/v1",
         model_id="test-model",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
     )
     assert layout["auth_json"] is None
     assert not (root / "oc-home" / ".local" / "share" / "opencode" / "auth.json").exists()
@@ -61,7 +61,7 @@ def test_api_key_written_to_oc_home_auth_json_mode_600(tmp_path):
         root,
         model_endpoint="https://api.example.com/v1",
         model_id="test-model",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
         api_key="sk-secret-123",
     )
     auth_path = root / "oc-home" / ".local" / "share" / "opencode" / "auth.json"
@@ -88,7 +88,7 @@ def test_auth_json_is_owner_private_600(tmp_path):
         root,
         model_endpoint="https://api.example.com/v1",
         model_id="test-model",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
         api_key="sk-secret-123",
     )
     # mode 600 like `opencode auth login` writes — owner read/write only.
@@ -104,7 +104,7 @@ def test_auth_json_merges_preexisting_credentials(tmp_path):
         root,
         model_endpoint="https://api.example.com/v1",
         model_id="test-model",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
         api_key="sk-new",
     )
     data = json.loads(auth_path.read_text())
@@ -123,7 +123,7 @@ def test_auth_json_recovers_from_corrupt_existing_file(tmp_path):
         root,
         model_endpoint="https://api.example.com/v1",
         model_id="test-model",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
         api_key="sk-new",
     )
     data = json.loads(auth_path.read_text())
@@ -139,7 +139,7 @@ def test_auth_json_resets_when_existing_is_not_a_dict(tmp_path):
         root,
         model_endpoint="https://api.example.com/v1",
         model_id="test-model",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
         api_key="sk-new",
     )
     data = json.loads(auth_path.read_text())
@@ -152,7 +152,7 @@ def test_bootstrap_builds_leaf_parent_layout(tmp_path):
         root,
         model_endpoint="http://example:11434/v1",
         model_id="test-model",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
     )
     work = root / "workspace"
     assert work.is_dir()
@@ -170,7 +170,7 @@ def test_bootstrap_builds_leaf_parent_layout(tmp_path):
     assert p["bash"] == "deny" and p["external_directory"] == "deny"
     # idempotent
     bootstrap.init_install(root, model_endpoint="http://example:11434/v1",
-                           model_id="test-model", agenda_server="/opt/.venv/bin/agenda-server")
+                           model_id="test-model", python_executable="/opt/.venv/bin/python")
     assert work.is_dir()
 
 
@@ -184,7 +184,7 @@ def test_bootstrap_refuses_install_inside_existing_git_repo(tmp_path):
             tmp_path / "cos-notes",
             model_endpoint="http://example:11434/v1",
             model_id="test-model",
-            agenda_server="/opt/.venv/bin/agenda-server",
+            python_executable="/opt/.venv/bin/python",
         )
 
 
@@ -192,16 +192,13 @@ def test_bootstrap_registers_present_mcp_server(tmp_path):
     root = tmp_path / "cos-notes"
     bootstrap.init_install(
         root, model_endpoint="http://example:11434/v1", model_id="m",
-        agenda_server="/opt/.venv/bin/agenda-server",
+        python_executable="/opt/.venv/bin/python",
     )
-    import json
     cfg = json.loads((root / "opencode.json").read_text())
     assert "present" in cfg["mcp"]
-    # derived next to agenda-server in the same venv bin dir (OS-native separators,
-    # so compute the expected path the same way init_install does)
-    from pathlib import Path
-    expected = str(Path("/opt/.venv/bin/agenda-server").parent / "present-server")
-    assert cfg["mcp"]["present"]["command"] == [expected]
+    # Spawned via the same interpreter as the notes server, `python -m`.
+    assert cfg["mcp"]["present"]["command"] == ["/opt/.venv/bin/python", "-m", "presenter.server"]
+    assert cfg["mcp"]["notes"]["command"] == ["/opt/.venv/bin/python", "-m", "agenda.server"]
     # present tool is allowed by the agent permission policy
     assert cfg["agent"]["workspace-assistant"]["permission"].get("present_*") == "allow"
 
@@ -211,7 +208,7 @@ def test_bootstrap_refreshes_prompt_on_reinstall(tmp_path):
     updated canonical prompt (parity with opencode.json), not a stale copy."""
     root = tmp_path / "cos-notes"
     kw = dict(model_endpoint="http://example:11434/v1", model_id="test-model",
-              agenda_server="/opt/.venv/bin/agenda-server")
+              python_executable="/opt/.venv/bin/python")
     bootstrap.init_install(root, **kw)
     prompt = root / "notes-agent.md"
     canonical = prompt.read_text(encoding="utf-8")

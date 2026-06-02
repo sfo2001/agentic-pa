@@ -74,10 +74,16 @@ def check_environment() -> tuple[list[str], list[str]]:
             "`opencode` is not on PATH — it's needed to run the assistant (not to set "
             "it up). Install it from https://opencode.ai and re-check."
         )
-    if importlib.util.find_spec("agenda") is not None and shutil.which("agenda-server") is None:
+    # The MCP servers run as `python -m agenda.server` / `python -m presenter.server`
+    # (not via console-script exes), so what matters is that the modules import —
+    # not that an `agenda-server` exe is on PATH. `agenda` is already covered by the
+    # blocking import check above; warn if `presenter` (the presentation pane) is
+    # missing so the present MCP server doesn't fail at runtime.
+    if importlib.util.find_spec("presenter") is None:
         warnings.append(
-            "`agenda-server` is not on PATH — it should appear after `pip install -e "
-            "./agenda` in your active venv. Re-install the agenda package."
+            "`presenter` isn't importable — the presentation-pane MCP server "
+            "(`python -m presenter.server`) will fail to start. Run "
+            "`pip install -e ./presenter` in your active venv."
         )
     return blocking, warnings
 
@@ -221,7 +227,7 @@ def main() -> int:
         if not _yes("Continue with setup anyway?", default=True):
             return 1
     else:
-        print("Environment looks good (Python 3.10+, packages, opencode, agenda-server).\n")
+        print("Environment looks good (Python 3.10+, packages, opencode, agenda/presenter).\n")
 
     # Safe to import now that `frontend`/`agenda` are confirmed importable.
     from frontend.bootstrap import init_install
@@ -241,14 +247,16 @@ def main() -> int:
             "    git repo, e.g. ~/cos-notes."
         )
 
-    agenda_server = shutil.which("agenda-server") or str(Path(sys.executable).parent / "agenda-server")
-
     print(f"\nWriting install to {install_root} …")
+    # Spawn the MCP servers with THIS interpreter via `python -m` (see
+    # frontend.config). Using sys.executable avoids resolving a console-script
+    # path — robust on Windows where the .exe lives in a Scripts dir that may be
+    # off PATH (base/`--user` installs) or blocked by AppLocker/SRP.
     layout = init_install(
         install_root,
         model_endpoint=endpoint,
         model_id=model_id,
-        agenda_server=agenda_server,
+        python_executable=sys.executable,
         api_key=api_key,
     )
     print(f"  ✓ workspace:    {layout['workspace']}")

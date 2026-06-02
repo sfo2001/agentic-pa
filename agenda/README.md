@@ -24,9 +24,12 @@ Coverage (pytest-cov is declared in `agenda/requirements-dev.txt`):
 ## Run as an MCP server
 
 The server reads the notes directory from the `NOTES_ROOT` environment variable
-and speaks MCP over stdio (it is launched by OpenCode, not run standalone):
+and speaks MCP over stdio (it is launched by OpenCode, not run standalone).
+OpenCode spawns it via the interpreter — `python -m agenda.server` — which is the
+canonical form; the `agenda-server` console script runs the same `main()`:
 
-    NOTES_ROOT=/path/to/notes .venv/bin/agenda-server
+    NOTES_ROOT=/path/to/notes python -m agenda.server      # canonical (how OpenCode launches it)
+    NOTES_ROOT=/path/to/notes .venv/bin/agenda-server      # equivalent console-script form
 
 The server advertises bare tool names `today`, `review`, `topic`, `search`;
 OpenCode registers them as `notes_today`, `notes_review`, `notes_topic`,

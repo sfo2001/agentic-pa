@@ -11,7 +11,7 @@ are tracked.
 
     # 1. Runtime venv for the Agenda MCP server
     python3 -m venv .venv
-    .venv/bin/pip install -e ./agenda          # provides `agenda-server`
+    .venv/bin/pip install -e ./agenda          # makes `agenda.server` importable for `python -m`
 
     # 2. Local config: copy the example, fill in YOUR endpoint + model
     cp notes-mvp/.env.example notes-mvp/.env    # .env is gitignored

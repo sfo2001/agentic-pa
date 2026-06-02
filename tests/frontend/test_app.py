@@ -258,9 +258,8 @@ def test_bh31_config_permissions_dict_copy_has_no_effect():
         model_endpoint="http://inf:8000",
         model_id="inf-model",
         notes_root="/tmp/notes",
-        agenda_server="/usr/bin/agenda-server",
+        python_executable="/usr/bin/python",
         prompt_path="/etc/prompt.md",
-        present_server="/usr/bin/present-server",
     )
     assert "permission" in cfg
     assert cfg["agent"]["workspace-assistant"]["permission"]["bash"] == "deny"

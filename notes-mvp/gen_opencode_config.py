@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 from frontend.config import CANONICAL_PROMPT_PATH, build_opencode_config
 
 HERE = Path(__file__).resolve().parent            # notes-mvp/
-REPO = HERE.parent                                 # repo root
 
 
 def _required(name: str) -> str:
@@ -32,8 +32,9 @@ def main() -> None:
     model_id = _required("MODEL_ID")
     # Treat empty values as unset so a blank env var falls back to the dev default.
     notes_root = os.environ.get("NOTES_ROOT") or str(HERE / "sample-notes")
-    agenda_server = os.environ.get("AGENDA_SERVER") or str(REPO / ".venv" / "bin" / "agenda-server")
-    present_server = str(Path(agenda_server).parent / "present-server")
+    # The MCP servers run as `python -m <module>` (see frontend.config); use this
+    # interpreter by default. PYTHON lets a dev point at a different venv.
+    python_executable = os.environ.get("PYTHON") or sys.executable
     # Optional: authenticated dev endpoints. When API_KEY is set, apiKey is
     # omitted from the generated opencode.json (production stores it in opencode's
     # auth.json; this dev helper only needs to keep the config valid for an
@@ -44,9 +45,8 @@ def main() -> None:
         model_endpoint=model_endpoint,
         model_id=model_id,
         notes_root=notes_root,
-        agenda_server=agenda_server,
+        python_executable=python_executable,
         prompt_path=str(CANONICAL_PROMPT_PATH),
-        present_server=present_server,
         api_key=api_key,
     )
     out = HERE / "opencode.json"

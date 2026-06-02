@@ -91,7 +91,7 @@ def init_install(
     *,
     model_endpoint: str,
     model_id: str,
-    agenda_server: str,
+    python_executable: str,
     api_key: str | None = None,
 ) -> dict:
     """Create (or verify) the Chief-of-Staff Notes install layout.
@@ -100,7 +100,9 @@ def init_install(
         install_root: Target directory for the install (will be created).
         model_endpoint: Base URL of the OpenAI-compatible inference server.
         model_id: Model identifier string.
-        agenda_server: Absolute path to the agenda-server executable.
+        python_executable: Absolute path to the venv Python that has agenda/
+            presenter installed; both MCP servers are spawned as
+            ``<python> -m <module>`` (see ``frontend.config``).
         api_key: Bearer token for an authenticated endpoint, or ``None`` for a
             local/keyless server. When set, it is stored in OpenCode's native
             auth.json under oc-home (mode 600) and deliberately OMITTED from
@@ -180,14 +182,12 @@ def init_install(
     # ------------------------------------------------------------------
     # Generate opencode.json into the install-root
     # ------------------------------------------------------------------
-    present_server = str(Path(agenda_server).parent / "present-server")
     config = build_opencode_config(
         model_endpoint=model_endpoint,
         model_id=model_id,
         notes_root=str(work),
-        agenda_server=agenda_server,
+        python_executable=python_executable,
         prompt_path=str(prompt_dest),
-        present_server=present_server,
         api_key=api_key,
     )
     opencode_json = root / "opencode.json"

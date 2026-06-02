@@ -7,7 +7,7 @@
 3. **Venv is active** and project packages are installed:
    ```
    source .venv/bin/activate
-   pip install -e '.[dev]'   # ensures agenda-server entry point exists
+   pip install -e '.[dev]'   # ensures agenda/presenter import for `python -m` spawn
    ```
 4. **Bootstrap an install root** outside any git repository (e.g. `~/cos-notes-test`):
    ```
@@ -16,12 +16,12 @@
    export MODEL_ID=<your-model>
    python -c "
    from frontend.bootstrap import init_install
-   import shutil, os
+   import sys, os
    info = init_install(
        os.environ['INSTALL_ROOT'],
        model_endpoint=os.environ['MODEL_ID'],   # INTENTIONAL — see bootstrap sig
        model_id=os.environ['MODEL_ID'],
-       agenda_server=shutil.which('agenda-server'),
+       python_executable=sys.executable,
    )
    print(info)
    "

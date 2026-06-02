@@ -19,15 +19,25 @@ CANONICAL_PROMPT_PATH = Path(__file__).resolve().parent / "assets" / "notes-agen
 # this id (see opencode provider.ts: auth.get(providerID)).
 PROVIDER_ID = "workspace-llm"
 
+# The MCP servers are spawned as ``<python> -m <module>`` rather than via their
+# console-script executables. This reuses the interpreter that bootstrapped the
+# install (no dependence on a Scripts/bin dir being on PATH) and sidesteps
+# Windows pitfalls: console scripts are ``.exe`` shims in a Scripts dir that, for
+# base or ``pip install --user`` installs, isn't next to python.exe — and that
+# ``.exe`` can be blocked by AppLocker/SRP execution policy. The modules below
+# are the ``[project.scripts]`` entry-point targets (agenda/presenter pyproject)
+# and both guard ``if __name__ == "__main__": main()`` so ``-m`` runs them.
+AGENDA_SERVER_MODULE = "agenda.server"
+PRESENT_SERVER_MODULE = "presenter.server"
+
 
 def build_opencode_config(
     *,
     model_endpoint: str,
     model_id: str,
     notes_root: str,
-    agenda_server: str,
+    python_executable: str,
     prompt_path: str,
-    present_server: str,
     api_key: str | None = None,
 ) -> dict:
     """Build and return the opencode.json config dict.
@@ -53,12 +63,15 @@ def build_opencode_config(
             isolated oc-home; the key never enters opencode.json.
         notes_root: Absolute path set as NOTES_ROOT for the MCP agenda server
             (= the ``workspace/`` directory in production).
-        agenda_server: Absolute path to the agenda-server executable.
+        python_executable: Absolute path to the Python interpreter used to spawn
+            BOTH MCP servers as ``<python> -m <module>`` (``AGENDA_SERVER_MODULE``
+            for notes, ``PRESENT_SERVER_MODULE`` for the presentation pane,
+            ADR-0006). Use the venv interpreter that has agenda/presenter
+            installed — normally ``sys.executable`` of the process running the
+            wizard. Chosen over the console-script executables for cross-platform
+            robustness (see the module constants above).
         prompt_path: Absolute path to the ``notes-agent.md`` system prompt,
             embedded as ``{file:<path>}`` in the agent config.
-        present_server: Absolute path to the present-server executable (MCP
-            server for the presentation pane, ADR-0006). Must live in the same
-            venv bin dir as agenda-server.
     """
     permissions = {
         "bash": "deny",
@@ -104,13 +117,13 @@ def build_opencode_config(
         "mcp": {
             "notes": {
                 "type": "local",
-                "command": [agenda_server],
+                "command": [python_executable, "-m", AGENDA_SERVER_MODULE],
                 "enabled": True,
                 "environment": {"NOTES_ROOT": notes_root},
             },
             "present": {
                 "type": "local",
-                "command": [present_server],
+                "command": [python_executable, "-m", PRESENT_SERVER_MODULE],
                 "enabled": True,
             },
         },

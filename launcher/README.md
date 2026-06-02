@@ -27,8 +27,10 @@ first so that `<INSTALL_ROOT>/workspace/` exists.
 2. `<INSTALL_ROOT>/workspace/` exists.
 3. `<INSTALL_ROOT>/notes.git` exists (the split git-dir; run bootstrap first).
 4. No `.git` at or above `<INSTALL_ROOT>/workspace/` — see ADR-0005 below.
-5. The `agenda-server` configured in `opencode.json` (`mcp.agenda.command`) exists
-   on disk or PATH — otherwise the agent's deterministic agenda tools would fail.
+5. The notes MCP command in `opencode.json` (`mcp.notes.command`) is runnable: its
+   interpreter exists on disk/PATH and — for the `python -m <module>` form — the
+   module imports under that interpreter. Otherwise the agent's deterministic
+   agenda tools would fail.
 6. Both `OPENCODE_PORT` and `WEB_PORT` are free. (A benign check-then-bind race
    exists; acceptable for a single-user localhost deployment.)
 

@@ -1,11 +1,15 @@
 import json
 import socket
 import subprocess
+import sys
 
 from launcher.run import (
+    _module_importable,
+    _python_m_module,
     agenda_server_path,
     isolated_env,
     no_git_ancestor,
+    notes_mcp_command,
     port_is_free,
     require_tools,
 )
@@ -129,3 +133,66 @@ def test_bh26_agenda_server_path_handles_list_out_of_range(tmp_path):
         encoding="utf-8",
     )
     assert agenda_server_path(tmp_path) is None
+
+
+# ── python -m command form (Windows-robust MCP spawn) ────────────────────────
+
+
+def test_notes_mcp_command_returns_full_list(tmp_path):
+    cmd = ["/opt/.venv/bin/python", "-m", "agenda.server"]
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({"mcp": {"notes": {"command": cmd}}}), encoding="utf-8"
+    )
+    assert notes_mcp_command(tmp_path) == cmd
+
+
+def test_notes_mcp_command_none_when_missing_or_empty(tmp_path):
+    assert notes_mcp_command(tmp_path) is None  # no opencode.json
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({"mcp": {"notes": {"command": []}}}), encoding="utf-8"
+    )
+    assert notes_mcp_command(tmp_path) is None  # empty command
+
+
+def test_agenda_server_path_returns_interpreter_for_python_m_form(tmp_path):
+    # With the python -m form, command[0] is the interpreter (still command[0]).
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({"mcp": {"notes": {"command": ["/opt/.venv/bin/python", "-m", "agenda.server"]}}}),
+        encoding="utf-8",
+    )
+    assert agenda_server_path(tmp_path) == "/opt/.venv/bin/python"
+
+
+def test_python_m_module_detects_form():
+    assert _python_m_module(["/venv/bin/python", "-m", "agenda.server"]) == "agenda.server"
+    assert _python_m_module(["/usr/bin/agenda-server"]) is None        # legacy exe form
+    assert _python_m_module(["/venv/bin/python", "-c", "x"]) is None    # not -m
+
+
+def test_module_importable_true_for_stdlib():
+    assert _module_importable(sys.executable, "json") is True
+
+
+def test_module_importable_false_for_missing_module():
+    assert _module_importable(sys.executable, "no_such_module_xyz_42") is False
+
+
+def test_module_importable_false_for_bad_interpreter():
+    assert _module_importable("/nonexistent/python", "json") is False
+
+
+def test_module_importable_rejects_malformed_name_without_spawning():
+    # A tampered module name must be rejected by the regex guard before any
+    # subprocess runs — no code from the `-c` string is ever executed.
+    assert _module_importable(sys.executable, "os; import subprocess") is False
+    assert _module_importable(sys.executable, "a-b") is False
+    assert _module_importable(sys.executable, "") is False
+
+
+def test_module_importable_false_on_timeout(monkeypatch):
+    # A hung import (TimeoutExpired, a SubprocessError) must fail closed, not raise.
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="python", timeout=10)
+
+    monkeypatch.setattr("launcher.run.subprocess.run", boom)
+    assert _module_importable(sys.executable, "json") is False
