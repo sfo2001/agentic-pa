@@ -70,6 +70,8 @@ pip install -r agenda/requirements-dev.txt -r frontend/requirements-dev.txt
 python -c "from frontend.bootstrap import init_install; \
 init_install('$HOME/cos-notes', model_endpoint='http://<host>:11434/v1', \
 model_id='<model-id>', agenda_server='$PWD/.venv/bin/agenda-server')"
+# If your endpoint requires a key, add api_key='sk-...' — it is stored in
+# OpenCode's auth.json (oc-home, mode 600), not in opencode.json.
 
 # Run it (Ctrl+C to stop) — use the venv's python so the installed deps are found:
 INSTALL_ROOT=$HOME/cos-notes .venv/bin/python -m launcher.run

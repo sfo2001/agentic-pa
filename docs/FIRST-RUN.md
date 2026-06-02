@@ -43,10 +43,18 @@ layout = init_install(
     model_endpoint="http://<your-host>:11434/v1",   # your model endpoint
     model_id="<your-model-id>",                      # e.g. a 64k-context instruct model
     agenda_server=str(Path(".venv/bin/agenda-server").resolve()),
+    # api_key="sk-...",   # only if your endpoint requires auth (omit for Ollama/local)
 )
 print("installed:", layout["install_root"])
 PY
 ```
+
+> **Authenticated endpoints:** if your endpoint needs an API key, pass
+> `api_key="sk-..."`. The key is stored in OpenCode's own credential file
+> (`<install>/oc-home/.local/share/opencode/auth.json`, mode 600) and is
+> deliberately **kept out of `opencode.json`** — an inline `apiKey` there would
+> shadow it. The interactive `setup_wizard` does this for you: it detects a
+> 401/403 from the endpoint and prompts for the key (input hidden).
 
 This creates:
 

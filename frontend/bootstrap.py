@@ -19,12 +19,62 @@ sandbox boundary to the git work-tree root (see D-opencode-sandbox.md).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from frontend.config import CANONICAL_PROMPT_PATH, build_opencode_config
+from frontend.config import CANONICAL_PROMPT_PATH, PROVIDER_ID, build_opencode_config
 
 # Canonical system prompt ships inside the installable ``frontend`` package.
 _CANONICAL_PROMPT = CANONICAL_PROMPT_PATH
+
+
+def _open_private(path, flags):
+    """``open()`` opener that creates the file with mode 0600 from the start.
+
+    Passing this as ``open(..., opener=_open_private)`` means the secret is
+    written into a file that is owner-only from creation — no world-readable
+    window between ``write`` and a follow-up ``chmod`` (and no lingering 0644
+    file if a later ``chmod`` were to fail).
+    """
+    return os.open(path, flags, 0o600)
+
+
+def _write_auth_json(oc_home: Path, api_key: str) -> Path:
+    """Store *api_key* in OpenCode's native credential file, mode 600.
+
+    OpenCode reads credentials from ``$XDG_DATA_HOME/opencode/auth.json`` keyed
+    by provider id (see opencode auth/index.ts). The launcher points
+    ``XDG_DATA_HOME`` at ``<install-root>/oc-home/.local/share`` (launcher.run),
+    so that is where this file must live for OpenCode to find it. The format and
+    0600 permission mirror what ``opencode auth login`` writes itself.
+
+    Note: ``chmod(0o600)`` only sets POSIX owner-private bits on POSIX systems;
+    on Windows it merely toggles the read-only attribute, so the owner-private
+    guarantee holds on POSIX only (the launcher/opencode stack is POSIX-oriented).
+    """
+    auth_path = oc_home / ".local" / "share" / "opencode" / "auth.json"
+    auth_path.parent.mkdir(parents=True, exist_ok=True)
+    # Merge into any existing credentials rather than clobbering them.
+    existing: dict = {}
+    if auth_path.exists():
+        try:
+            loaded = json.loads(auth_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except (OSError, ValueError):
+            existing = {}
+    # Match opencode's own key normalization (auth.set strips trailing slashes);
+    # PROVIDER_ID has none today, but normalize so a future change can't make the
+    # written key diverge from opencode's read path.
+    key = PROVIDER_ID.rstrip("/")
+    existing[key] = {"type": "api", "key": api_key}
+    # Create owner-private (0600) up front rather than write-then-chmod, so the
+    # secret never lands in a world-readable file even briefly.
+    with open(auth_path, "w", encoding="utf-8", opener=_open_private) as fh:
+        fh.write(json.dumps(existing, indent=2) + "\n")
+    # Existing files keep their inode/mode through "w" truncation; re-assert 600.
+    auth_path.chmod(0o600)
+    return auth_path
 
 
 def _has_git_ancestor(path: Path) -> bool:
@@ -42,6 +92,7 @@ def init_install(
     model_endpoint: str,
     model_id: str,
     agenda_server: str,
+    api_key: str | None = None,
 ) -> dict:
     """Create (or verify) the Chief-of-Staff Notes install layout.
 
@@ -50,10 +101,16 @@ def init_install(
         model_endpoint: Base URL of the OpenAI-compatible inference server.
         model_id: Model identifier string.
         agenda_server: Absolute path to the agenda-server executable.
+        api_key: Bearer token for an authenticated endpoint, or ``None`` for a
+            local/keyless server. When set, it is stored in OpenCode's native
+            auth.json under oc-home (mode 600) and deliberately OMITTED from
+            opencode.json — an inline ``options.apiKey`` would shadow the
+            auth.json credential (see ``frontend.config.build_opencode_config``).
 
     Returns:
         A dict with keys ``install_root``, ``workspace``, ``git_dir``,
-        ``opencode_json``.
+        ``opencode_json``, and ``auth_json`` (``None`` for keyless installs,
+        else the ``Path`` to the written auth.json).
 
     Raises:
         RuntimeError: If ``install_root`` or any ancestor already contains a
@@ -131,9 +188,17 @@ def init_install(
         agenda_server=agenda_server,
         prompt_path=str(prompt_dest),
         present_server=present_server,
+        api_key=api_key,
     )
     opencode_json = root / "opencode.json"
     opencode_json.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+
+    # ------------------------------------------------------------------
+    # Store the API key (if any) in OpenCode's native auth.json under oc-home.
+    # opencode.json deliberately omits options.apiKey for authenticated
+    # endpoints, so the key here is what OpenCode actually uses.
+    # ------------------------------------------------------------------
+    auth_json = _write_auth_json(oc_home, api_key) if api_key else None
 
     # ------------------------------------------------------------------
     # Initialise the split notes git repo (work-tree = workspace, git-dir
@@ -148,4 +213,5 @@ def init_install(
         "workspace": work,
         "git_dir": git_dir,
         "opencode_json": opencode_json,
+        "auth_json": auth_json,
     }

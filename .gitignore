@@ -13,3 +13,7 @@ notes-mvp/sample-notes/documents/
 oc-home/
 notes.git/
 workspace/
+# Generated OpenCode config / credentials — may carry machine-local values or a
+# real API key; never commit, regardless of where they land in the tree.
+**/opencode.json
+**/auth.json

@@ -1,8 +1,10 @@
 import json
+import sys
 
 import pytest
 
 from frontend import bootstrap, versioning
+from frontend.config import PROVIDER_ID
 
 
 def test_install_gitignores_lwt_caches(tmp_path):
@@ -36,6 +38,112 @@ def test_install_gitignore_appends_to_existing(tmp_path):
     assert ".lwt_cache/" in gi          # appended
     assert ".tmp/" in gi
     assert gi.count(".lwt_cache/") == 1  # not duplicated on the second pass
+
+
+def test_no_auth_json_when_keyless(tmp_path):
+    root = tmp_path / "cos-notes"
+    layout = bootstrap.init_install(
+        root,
+        model_endpoint="http://example:11434/v1",
+        model_id="test-model",
+        agenda_server="/opt/.venv/bin/agenda-server",
+    )
+    assert layout["auth_json"] is None
+    assert not (root / "oc-home" / ".local" / "share" / "opencode" / "auth.json").exists()
+    # Keyless keeps the inline "local" placeholder so the SDK has a key.
+    cfg = json.loads((root / "opencode.json").read_text())
+    assert cfg["provider"][PROVIDER_ID]["options"]["apiKey"] == "local"
+
+
+def test_api_key_written_to_oc_home_auth_json_mode_600(tmp_path):
+    root = tmp_path / "cos-notes"
+    layout = bootstrap.init_install(
+        root,
+        model_endpoint="https://api.example.com/v1",
+        model_id="test-model",
+        agenda_server="/opt/.venv/bin/agenda-server",
+        api_key="sk-secret-123",
+    )
+    auth_path = root / "oc-home" / ".local" / "share" / "opencode" / "auth.json"
+    # Lands at the path OpenCode reads under the isolated XDG_DATA_HOME.
+    assert layout["auth_json"] == auth_path
+    assert auth_path.is_file()
+    # Native opencode format, keyed by the shared provider id.
+    data = json.loads(auth_path.read_text())
+    assert data[PROVIDER_ID] == {"type": "api", "key": "sk-secret-123"}
+    # Secret must NOT leak into opencode.json, and apiKey is omitted there so
+    # opencode falls through to auth.json.
+    cfg_text = (root / "opencode.json").read_text()
+    assert "sk-secret-123" not in cfg_text
+    assert "apiKey" not in json.loads(cfg_text)["provider"][PROVIDER_ID]["options"]
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows chmod only toggles the read-only bit; POSIX mode bits aren't honored.",
+)
+def test_auth_json_is_owner_private_600(tmp_path):
+    root = tmp_path / "cos-notes"
+    layout = bootstrap.init_install(
+        root,
+        model_endpoint="https://api.example.com/v1",
+        model_id="test-model",
+        agenda_server="/opt/.venv/bin/agenda-server",
+        api_key="sk-secret-123",
+    )
+    # mode 600 like `opencode auth login` writes — owner read/write only.
+    assert (layout["auth_json"].stat().st_mode & 0o777) == 0o600
+
+
+def test_auth_json_merges_preexisting_credentials(tmp_path):
+    root = tmp_path / "cos-notes"
+    auth_path = root / "oc-home" / ".local" / "share" / "opencode" / "auth.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text(json.dumps({"openrouter": {"type": "api", "key": "keep-me"}}))
+    bootstrap.init_install(
+        root,
+        model_endpoint="https://api.example.com/v1",
+        model_id="test-model",
+        agenda_server="/opt/.venv/bin/agenda-server",
+        api_key="sk-new",
+    )
+    data = json.loads(auth_path.read_text())
+    assert data["openrouter"] == {"type": "api", "key": "keep-me"}   # preserved
+    assert data[PROVIDER_ID] == {"type": "api", "key": "sk-new"}     # added
+
+
+def test_auth_json_recovers_from_corrupt_existing_file(tmp_path):
+    # A pre-existing auth.json that is not valid JSON (or not a dict) must not
+    # abort the install — the writer resets to {} and writes only our key.
+    root = tmp_path / "cos-notes"
+    auth_path = root / "oc-home" / ".local" / "share" / "opencode" / "auth.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text("}{ not json at all")  # corrupt on purpose
+    bootstrap.init_install(
+        root,
+        model_endpoint="https://api.example.com/v1",
+        model_id="test-model",
+        agenda_server="/opt/.venv/bin/agenda-server",
+        api_key="sk-new",
+    )
+    data = json.loads(auth_path.read_text())
+    assert data == {PROVIDER_ID: {"type": "api", "key": "sk-new"}}
+
+
+def test_auth_json_resets_when_existing_is_not_a_dict(tmp_path):
+    root = tmp_path / "cos-notes"
+    auth_path = root / "oc-home" / ".local" / "share" / "opencode" / "auth.json"
+    auth_path.parent.mkdir(parents=True)
+    auth_path.write_text(json.dumps(["unexpected", "array"]))  # valid JSON, wrong shape
+    bootstrap.init_install(
+        root,
+        model_endpoint="https://api.example.com/v1",
+        model_id="test-model",
+        agenda_server="/opt/.venv/bin/agenda-server",
+        api_key="sk-new",
+    )
+    data = json.loads(auth_path.read_text())
+    assert data == {PROVIDER_ID: {"type": "api", "key": "sk-new"}}
 
 
 def test_bootstrap_builds_leaf_parent_layout(tmp_path):

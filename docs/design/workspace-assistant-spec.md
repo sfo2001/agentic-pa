@@ -798,6 +798,15 @@ Concrete per-profile skeletons are in the appendices.
 
 Notes on verified behavior:
 
+- **Provider id & API key.** The provider key (`workspace-llm` above) is the
+  single constant `frontend.config.PROVIDER_ID`; it must match the `model`
+  reference and the key under which a credential is stored in OpenCode's
+  `auth.json`. For keyless/local endpoints the frontend writes
+  `options.apiKey: "local"`; for authenticated endpoints it **omits** `apiKey`
+  and writes the real key to `auth.json` (mode 600) under the isolated oc-home —
+  OpenCode only falls back to `auth.json` when `options.apiKey` is *undefined*
+  (`provider.ts`: `if (options["apiKey"] === undefined && provider.key) …`), so
+  an inline value would shadow the stored credential.
 - **System prompt.** An agent's `prompt` replaces the static, provider-specific
   base prompt entirely. `instructions` and any `AGENTS.md`/`CLAUDE.md` in the
   tree are still appended (§6.6). The `prompt` file is read as-is — no

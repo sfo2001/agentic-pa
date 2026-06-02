@@ -11,11 +11,13 @@ the command to start it.
 """
 from __future__ import annotations
 
+import getpass
 import importlib.util
 import json
 import os
 import shutil
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -97,21 +99,97 @@ def _yes(label: str, default: bool = False) -> bool:
     return ans in ("y", "yes")
 
 
-def fetch_models(endpoint: str) -> list[str]:
-    """List model ids from an OpenAI-compatible ``/models`` endpoint ([] on failure)."""
-    url = endpoint.rstrip("/") + "/models"
+def _secret(label: str) -> str:
+    """Prompt for a secret WITHOUT echoing it to the terminal or scrollback."""
     try:
-        with urllib.request.urlopen(url, timeout=5) as r:
+        return getpass.getpass(f"{label}: ").strip()
+    except (EOFError, getpass.GetPassWarning):
+        return ""
+
+
+def probe_endpoint(endpoint: str, api_key: str | None = None) -> tuple[str, list[str]]:
+    """Probe an OpenAI-compatible ``/models`` endpoint.
+
+    Returns ``(status, models)`` where status is:
+      * ``"ok"``          — reachable and authorized; ``models`` is the id list.
+      * ``"auth"``        — reachable but the endpoint demands a key (HTTP 401/403).
+      * ``"unreachable"`` — no response, a connection error, or another HTTP error.
+
+    ``api_key``, when given, is sent as a ``Bearer`` token so a key supplied by
+    the user can be validated before the install is written.
+    """
+    url = endpoint.rstrip("/") + "/models"
+    req = urllib.request.Request(url)
+    if api_key:
+        req.add_header("Authorization", f"Bearer {api_key}")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as r:
             data = json.load(r)
+    except urllib.error.HTTPError as e:
+        return ("auth", []) if e.code in (401, 403) else ("unreachable", [])
     except Exception:
-        return []
-    if not isinstance(data, dict):
-        return []
-    return [m["id"] for m in data.get("data", []) if isinstance(m, dict) and "id" in m]
+        return ("unreachable", [])
+    models = (
+        [m["id"] for m in data.get("data", []) if isinstance(m, dict) and "id" in m]
+        if isinstance(data, dict)
+        else []
+    )
+    return ("ok", models)
 
 
-def _choose_model(endpoint: str) -> str:
-    models = fetch_models(endpoint)
+def fetch_models(endpoint: str, api_key: str | None = None) -> list[str]:
+    """List model ids from an OpenAI-compatible ``/models`` endpoint ([] on failure)."""
+    return probe_endpoint(endpoint, api_key)[1]
+
+
+def _is_plaintext_remote(endpoint: str) -> bool:
+    """True if *endpoint* sends a key in the clear: http:// to a non-loopback host."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(endpoint)
+    if parsed.scheme != "http":
+        return False
+    host = (parsed.hostname or "").lower()
+    return host not in ("localhost", "127.0.0.1", "::1", "")
+
+
+def _collect_endpoint(default: str) -> tuple[str, str | None]:
+    """Prompt for the endpoint, probe it, and obtain a key if one is required.
+
+    Loops until the endpoint answers (``ok``) or the user chooses to proceed
+    without resolving it. Returns ``(endpoint, api_key)``; ``api_key`` is
+    ``None`` for keyless/local servers.
+    """
+    endpoint = _prompt("Model endpoint (OpenAI-compatible)", default)
+    api_key: str | None = None
+    while True:
+        status, _models = probe_endpoint(endpoint, api_key)
+        if status == "ok":
+            if api_key and _is_plaintext_remote(endpoint):
+                print(
+                    "  ! Warning: the key will be sent unencrypted over http:// to a\n"
+                    "    non-local host. Prefer an https:// endpoint."
+                )
+            return endpoint, api_key
+        if status == "auth":
+            print("  This endpoint requires authentication (HTTP 401/403).")
+            entered = _secret("API key (input hidden)")
+            if not entered:
+                print("  (no key entered — continuing; the model list may be unavailable)")
+                return endpoint, api_key
+            api_key = entered
+            continue
+        # unreachable
+        print(f"  ! Couldn't reach {endpoint} (no response, timeout, or error).")
+        if _yes("Re-enter the endpoint?", default=True):
+            endpoint = _prompt("Model endpoint (OpenAI-compatible)", endpoint)
+            api_key = None
+            continue
+        return endpoint, api_key
+
+
+def _choose_model(endpoint: str, api_key: str | None = None) -> str:
+    models = fetch_models(endpoint, api_key)
     if not models:
         print("  (couldn't list models from the endpoint — enter the id manually)")
         return _prompt("Model id")
@@ -149,8 +227,8 @@ def main() -> int:
     from frontend.bootstrap import init_install
     from launcher.run import no_git_ancestor
 
-    endpoint = _prompt("Model endpoint (OpenAI-compatible)", "http://localhost:11434/v1")
-    model_id = _choose_model(endpoint)
+    endpoint, api_key = _collect_endpoint("http://localhost:11434/v1")
+    model_id = _choose_model(endpoint, api_key)
 
     default_root = str(Path.home() / "cos-notes")
     while True:
@@ -171,10 +249,13 @@ def main() -> int:
         model_endpoint=endpoint,
         model_id=model_id,
         agenda_server=agenda_server,
+        api_key=api_key,
     )
     print(f"  ✓ workspace:    {layout['workspace']}")
     print(f"  ✓ config:       {layout['opencode_json']}  (machine-specific, not committed)")
     print(f"  ✓ notes git:    {layout['git_dir']}")
+    if layout.get("auth_json"):
+        print(f"  ✓ api key:      {layout['auth_json']}  (OpenCode auth.json, mode 600)")
 
     # Use THIS interpreter (the venv's python that ran the wizard) — a bare
     # `python`/`python3` would pick the system interpreter, which doesn't have the

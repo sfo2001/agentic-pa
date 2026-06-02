@@ -34,6 +34,11 @@ def main() -> None:
     notes_root = os.environ.get("NOTES_ROOT") or str(HERE / "sample-notes")
     agenda_server = os.environ.get("AGENDA_SERVER") or str(REPO / ".venv" / "bin" / "agenda-server")
     present_server = str(Path(agenda_server).parent / "present-server")
+    # Optional: authenticated dev endpoints. When API_KEY is set, apiKey is
+    # omitted from the generated opencode.json (production stores it in opencode's
+    # auth.json; this dev helper only needs to keep the config valid for an
+    # authed endpoint). Treat empty as unset.
+    api_key = os.environ.get("API_KEY") or None
 
     config = build_opencode_config(
         model_endpoint=model_endpoint,
@@ -42,6 +47,7 @@ def main() -> None:
         agenda_server=agenda_server,
         prompt_path=str(CANONICAL_PROMPT_PATH),
         present_server=present_server,
+        api_key=api_key,
     )
     out = HERE / "opencode.json"
     out.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
