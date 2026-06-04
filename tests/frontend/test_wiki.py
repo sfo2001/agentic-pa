@@ -101,3 +101,21 @@ def test_housekeeping_orphan_findings_scoped_to_curated(tmp_path):
     assert any(f["type"] == "orphan" and f["path"] == "topics/lonely.md" for f in findings)
     assert not any(f["type"] == "orphan" and f["path"].startswith("documents/") for f in findings)
     assert not any(f["type"] == "orphan" and f["path"].startswith("inbox/") for f in findings)
+
+
+# ── Sweep T13: diary/ coexists with housekeeping (not indexed, not orphan) ───
+
+
+def test_diary_dir_not_indexed_or_orphaned(tmp_path):
+    (tmp_path / "topics").mkdir()
+    (tmp_path / "diary").mkdir()
+    (tmp_path / "topics" / "atlas.md").write_text(
+        "---\nslug: atlas\ntitle: Atlas\n---\n## Overview\n", encoding="utf-8"
+    )
+    (tmp_path / "diary" / "2026-06-04.md").write_text(
+        "# Diary 2026-06-04\n\n## 14:30\n\nthoughts\n", encoding="utf-8"
+    )
+    findings = run_housekeeping(tmp_path)
+    index = (tmp_path / "index.md").read_text(encoding="utf-8")
+    assert "diary/2026-06-04.md" not in index  # diary is not a curated page
+    assert all("diary" not in f.get("path", "") for f in findings)  # never flagged

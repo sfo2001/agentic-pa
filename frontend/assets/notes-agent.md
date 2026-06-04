@@ -101,12 +101,26 @@ Topic file — `topics/<slug>.md`:
     ## Open actions (as of YYYY-MM-DD)
 
 # What you do (the loop)
-- **Ingest**: when asked to process notes, read each raw note, segment it into
-  zero-or-more meetings plus loose items, write meeting records **using the exact
-  frontmatter format above**, update/create topic files (by slug, in the exact
-  topic format above), and add actions to `tasks.todo.txt`. Auto-file the clear
-  cases; ask only when a meeting's topic is genuinely ambiguous. Afterwards print
-  a compact changelog (meetings filed, actions added, new topics created).
+- **Ingest** (PROPOSE mode): when asked to ingest a capture, read it, segment it
+  into zero-or-more meetings plus loose items, and **emit ONLY a structured JSON
+  proposal — do not write any files**. The frontend applies what the user confirms.
+  Use this exact schema (a ```json fenced block):
+
+      ```json
+      {
+        "diary": "<clean prose narrative of this capture's thinking, or empty>",
+        "actions": ["(B) <text> +topic @context due:… t:… upd:<today>", …],
+        "topics": [{"slug": "<slug>", "section": "## Current state",
+                     "text": "<note to add under that section>"}, …],
+        "meetings": [{"slug": "<slug>", "title": "…", "topics": ["<slug>"],
+                       "summary": "…", "decisions": "…", "actions": "…",
+                       "raw": "…"}]   // ONLY if a real gathering was recounted
+      }
+      ```
+
+  A solo braindump yields a `diary` plus `actions`/`topics`; create a `meetings`
+  entry only when the capture recounts an actual meeting. Set `upd:` to today on
+  every action; give a `(B)` action with no `t:` a tickler one week out.
 - **Daily brief**: call `notes_today`, then write `briefs/<DATE>-daily.md` and
   present do-now / schedule / resurfacing.
 - **Weekly review**: call `notes_review`, propose re-prioritisation, resurface

@@ -449,3 +449,79 @@ async def test_bh15_send_raises_session_lost_when_create_session_fails():
         await proxy.send("hello")
 
     await proxy.aclose()
+
+
+# ── Group K: transcript before session / propose_ingest error handling ───────
+
+
+async def test_transcript_before_session_returns_empty_list():
+    """K-1: transcript() before any ensure_session() returns [] (not raises).
+
+    The Sweep endpoint calls proxy.transcript() right after ensure_session(),
+    so the case of "transcript without a session" is real: e.g. an old state
+    file with a session_id that the upstream has since discarded. The proxy
+    must hand back an empty list so the Sweep returns "nothing new" cleanly.
+    """
+    oc = OpenCodeClient(
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=make_fake_opencode(script=[])), base_url="http://oc"),
+        agent="workspace-assistant",
+    )
+    proxy = NotesProxy(oc)
+    msgs = await proxy.transcript()
+    assert msgs == []
+    await proxy.aclose()
+
+
+async def test_propose_ingest_does_not_wrap_keyerror_as_session_lost():
+    """L-6: propose_ingest does not wrap KeyError/ValueError as SessionLost.
+
+    pr-audit item 12: a "bad proposal" (agent returned garbage, raising
+    a KeyError from a future client contract change) should surface as
+    proposal.ProposalError → 502, not SessionLost → 503. By dropping
+    KeyError/ValueError from the except clause, those exceptions
+    propagate to the caller's ProposalError handler.
+    """
+    class _KeyErrorClient:
+        """Spy client whose final_text raises KeyError to simulate a
+        server-side contract break (a field the current code doesn't expect)."""
+        async def create_session(self):
+            return "ses_fake"
+        async def send_message(self, sid, text):
+            return None
+        async def final_text(self, sid):
+            raise KeyError("unexpected response shape")
+        async def aclose(self):
+            pass
+
+    proxy = NotesProxy(_KeyErrorClient())
+    proxy._session_id = "ses_fake"  # bypass ensure_session
+    # KeyError MUST propagate — the test fails if a future regression
+    # re-adds KeyError to the except clause and wraps it as SessionLost.
+    with pytest.raises(KeyError):
+        await proxy.propose_ingest("inbox/foo.md")
+    await proxy.aclose()
+
+
+async def test_propose_ingest_wraps_http_error_as_session_lost():
+    """L-6 (positive control): HTTP errors are still mapped to SessionLost.
+
+    Pins the new narrower except clause: it still catches (httpx.HTTPError,
+    RuntimeError) → SessionLost, even though KeyError/ValueError now
+    propagate. A regression that drops the except clause entirely would
+    let HTTPError bubble out as a 500.
+    """
+    import httpx as _httpx
+
+    class _FailTransport(_httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            raise _httpx.ConnectError("connection refused")
+
+    oc = OpenCodeClient(
+        _httpx.AsyncClient(transport=_FailTransport(), base_url="http://oc"),
+        agent="workspace-assistant",
+    )
+    proxy = NotesProxy(oc)
+    proxy._session_id = "ses_fake"
+    with pytest.raises(SessionLost):
+        await proxy.propose_ingest("inbox/foo.md")
+    await proxy.aclose()

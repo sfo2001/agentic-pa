@@ -1,0 +1,373 @@
+"""Structured Ingest proposals: parse the agent's proposal, apply it deterministically.
+
+The agent proposes (it does not write); the frontend applies the confirmed proposal,
+so what the user confirms is byte-for-byte what lands. See
+docs/adr/0009-propose-confirm-ingest-and-diary-sweep.md.
+"""
+from __future__ import annotations
+
+import datetime
+import json
+import re
+from pathlib import Path
+
+import yaml
+
+# Slugs: lowercase alnum + hyphen/underscore; 1-64 chars; no path separators.
+# Reject anything that could become a path component (no '.', '/', '\\', '..').
+SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+SLUG_PATTERN = SLUG_RE.pattern
+
+# Hard caps on proposal list sizes — defends against DoS via oversized proposals.
+MAX_ACTIONS = 50
+MAX_TOPICS = 20
+MAX_MEETINGS = 10
+
+# Known topic/meeting sections (literal set used by the Pydantic model).
+# `## Open actions (as of YYYY-MM-DD)` is the regenerated snapshot — also
+# accepted, but only when the date is a real \d{4}-\d{2}-\d{2} pattern.
+_OPEN_ACTIONS_RE_STRICT = re.compile(
+    r"^## Open actions \(as of \d{4}-\d{2}-\d{2}\)$"
+)
+_VALID_SECTION_HEADERS = (
+    "## Overview", "## Current state", "## Open questions",
+    "## Key decisions", "## Meetings", "## Documents",
+)
+VALID_SECTIONS: tuple[str, ...] = _VALID_SECTION_HEADERS
+
+
+class ProposalError(ValueError):
+    """The agent output could not be parsed as a structured proposal."""
+
+
+class ProposalValidationError(ValueError):
+    """A proposal field failed structural validation (regex, literal, length)."""
+
+
+def is_valid_section(section: str) -> bool:
+    r"""True if *section* is a known topic section header (exact match or the
+    regenerated ``## Open actions (as of YYYY-MM-DD)`` snapshot form with a
+    valid ``\d{4}-\d{2}-\d{2}`` date).
+    """
+    if section in _VALID_SECTION_HEADERS:
+        return True
+    if bool(_OPEN_ACTIONS_RE_STRICT.fullmatch(section)):
+        return True
+    return False
+
+
+def _find_balanced_json_object(text: str) -> str | None:
+    """Find the first balanced top-level ``{…}`` object in *text*.
+
+    Robust to inner braces (a topic text containing ``{x}`` must not be
+    mis-parsed as a closer). Returns the object substring, or None."""
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            obj, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+        if isinstance(obj, dict):
+            return text[start:end]
+        start = text.find("{", start + 1)
+    return None
+
+
+def parse_proposal(agent_text: str) -> dict:
+    """Extract and normalise the structured proposal from *agent_text*.
+
+    Accepts the last ```` ```json ```` fenced object, or a bare JSON object.
+    Raises ProposalError if no JSON object can be parsed. Missing keys default
+    to empties.
+
+    Uses ``json.JSONDecoder.raw_decode`` so inner braces in string fields
+    (e.g. a topic text containing ``{x}``) are not mistaken for the
+    object's close brace.
+    """
+    text = agent_text or ""
+    fenced = re.findall(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
+    raw: str | None = None
+    if fenced:
+        # Try each fenced block; take the last one that parses as a dict.
+        for candidate in reversed(fenced):
+            obj = _find_balanced_json_object(candidate)
+            if obj is not None:
+                raw = obj
+                break
+    if raw is None:
+        raw = _find_balanced_json_object(text)
+    if raw is None:
+        raise ProposalError("no JSON proposal found in agent output")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ProposalError(f"invalid proposal JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ProposalError("proposal is not a JSON object")
+    return {
+        "diary": str(data.get("diary", "")),
+        "actions": list(data.get("actions", []) or []),
+        "topics": list(data.get("topics", []) or []),
+        "meetings": list(data.get("meetings", []) or []),
+    }
+
+
+
+def _append_diary(notes_root: Path, text: str, now: datetime.datetime) -> None:
+    if not text.strip():
+        return
+    diary = notes_root / "diary"
+    diary.mkdir(parents=True, exist_ok=True)
+    path = diary / f"{now:%Y-%m-%d}.md"
+    if not path.exists():
+        path.write_text(f"# Diary {now:%Y-%m-%d}\n", encoding="utf-8")
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(f"\n## {now:%H:%M}\n\n{text.strip()}\n")
+
+
+def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime | None = None) -> dict:
+    """Apply a confirmed proposal deterministically. Returns a summary of writes.
+
+    Validation policy: per-item structural checks (slug regex, section literal)
+    are enforced *silently* — bad items are dropped, summary counts reflect
+    what was actually written. List caps are enforced by silent truncation
+    (first MAX_ACTIONS/MAX_TOPICS/MAX_MEETINGS) as a DoS backstop.
+
+    The ``SweepConfirm`` Pydantic boundary at the HTTP layer is the strict
+    validation gate — it uses the same regex and section-literal checks and
+    rejects malformed input with a 422. This function is the lenient applier
+    that direct callers (tests, scripts) can use without pre-validating.
+    """
+    if not isinstance(prop, dict):
+        raise ProposalValidationError("proposal is not a dict")
+    # Enforce the list caps at the apply level. We SILENTLY cap (truncate) —
+    # the HTTP boundary in SweepConfirm rejects with 422 for direct violations,
+    # but a direct caller (e.g. a test) gets the same DoS protection without
+    # needing to pre-validate.
+
+    # Per-item sanitization: strip control chars from action text (single-line),
+    # drop topic/meeting entries whose slug or section is invalid.
+    safe_actions: list[str] = []
+    for a in (prop.get("actions", []) or []):
+        # Strip control chars, the two-character escape sequences (`\n`, `\r`,
+        # `\t`), remaining C0 controls (NUL .. \x08, \x0E .. \x1F, \x7F),
+        # Unicode line/paragraph separators (U+2028, U+2029), and NEL (U+0085).
+        # An LLM may emit any of these to smuggle a second action line into
+        # tasks.todo.txt — flatten them to space.
+        s = str(a)
+        s = re.sub(
+            r"\\[nrt]|[\x00-\x08\x0e-\x1f\x7f\r\n\t\v\f\u2028\u2029\u0085]",
+            " ", s,
+        ).strip()
+        if s:
+            safe_actions.append(s)
+
+    safe_topics: list[dict] = []
+    for t in (prop.get("topics", []) or []):
+        if not isinstance(t, dict):
+            continue
+        slug = str(t.get("slug", "")).strip()
+        section = str(t.get("section", "## Current state")).strip()
+        text = str(t.get("text", "")).strip()
+        if not slug or not text:
+            continue
+        if not SLUG_RE.match(slug):
+            continue
+        if not is_valid_section(section):
+            continue
+        safe_topics.append({"slug": slug, "section": section, "text": text})
+
+    safe_meetings: list[dict] = []
+    for m in (prop.get("meetings", []) or []):
+        if not isinstance(m, dict):
+            continue
+        slug = str(m.get("slug", "")).strip()
+        if not slug or not SLUG_RE.match(slug):
+            continue
+        m_topics = [str(s).strip() for s in (m.get("topics") or [])]
+        m_topics = [s for s in m_topics if s and SLUG_RE.match(s)]
+        safe_meetings.append({
+            "slug": slug,
+            "title": str(m.get("title", slug)),
+            "topics": m_topics,
+            "summary": str(m.get("summary", "")),
+            "decisions": str(m.get("decisions", "")),
+            "actions": str(m.get("actions", "")),
+            "raw": str(m.get("raw", "")),
+        })
+
+    root = Path(notes_root)
+    now = now or datetime.datetime.now()
+    summary: dict = {"diary": False, "actions": 0, "topics": 0, "meetings": 0}
+    if str(prop.get("diary", "")).strip():
+        _append_diary(root, str(prop["diary"]), now)
+        summary["diary"] = True
+    # Silent cap (DoS hardening): if the caller passed more than MAX, take the
+    # first MAX. The Pydantic boundary in SweepConfirm will reject earlier with
+    # 422 for HTTP callers; this is the backstop for direct callers.
+    summary["actions"] = _append_actions(root, safe_actions[:MAX_ACTIONS])
+    summary["topics"] = _apply_topics(root, safe_topics[:MAX_TOPICS], now)
+    summary["meetings"] = _apply_meetings(root, safe_meetings[:MAX_MEETINGS], now)
+    return summary
+
+
+def _append_actions(notes_root: Path, actions: list[str]) -> int:
+    if not actions:
+        return 0
+    path = notes_root / "tasks.todo.txt"
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    path.write_text(existing + "\n".join(actions) + "\n", encoding="utf-8")
+    return len(actions)
+
+
+# Open-actions section marker, regenerated by _regenerate_open_actions_block.
+_OPEN_ACTIONS_RE = re.compile(
+    r"^## Open actions \(as of \d{4}-\d{2}-\d{2}\)\s*$", re.MULTILINE
+)
+
+
+def _regenerate_open_actions_block(notes_root: Path, topic_body: str, now: datetime.datetime) -> str:
+    """Replace the trailing ``## Open actions (as of …)`` block in *topic_body*
+    with a fresh snapshot computed from ``notes_root / "tasks.todo.txt"``.
+
+    If no such block exists in the topic, the new block is appended at EOF.
+    Only the LAST ``## Open actions (as of …)`` occurrence is replaced; this
+    preserves any earlier provenance the topic may carry.
+    """
+    today = now.strftime("%Y-%m-%d")
+    heading = f"## Open actions (as of {today})"
+    new_block = _build_open_actions_block(notes_root, topic_body, now, heading)
+    # Replace last occurrence (or append).
+    matches = list(_OPEN_ACTIONS_RE.finditer(topic_body))
+    if matches:
+        last = matches[-1]
+        # Drop the old block (from its heading line to EOF, since the snapshot
+        # is always the last block of the topic).
+        return topic_body[: last.start()].rstrip() + "\n\n" + new_block
+    suffix = "" if topic_body.endswith("\n") else "\n"
+    return f"{topic_body}{suffix}\n{new_block}\n"
+
+
+def _build_open_actions_block(notes_root: Path, topic_body: str, now: datetime.datetime, heading: str) -> str:
+    """Build the Open actions block, filtering by the +<slug> tags in the topic.
+
+    To find the topic's slug, read the YAML frontmatter; if absent, keep all
+    actions (the topic is brand-new — there's no +<slug> tag to filter by yet).
+    """
+    slug = _read_topic_slug(topic_body)
+    task_path = notes_root / "tasks.todo.txt"
+    if not task_path.exists():
+        return heading + "\n"
+    lines = [ln for ln in task_path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if slug:
+        tag = f"+{slug}"
+        lines = [ln for ln in lines if tag in ln]
+    if not lines:
+        return heading + "\n\n(none)\n"
+    return heading + "\n\n" + "\n".join("- " + ln for ln in lines) + "\n"
+
+
+def _read_topic_slug(topic_body: str) -> str | None:
+    if not topic_body.startswith("---\n"):
+        return None
+    end = topic_body.find("\n---", 4)
+    if end == -1:
+        return None
+    try:
+        fm = yaml.safe_load(topic_body[4:end]) or {}
+    except yaml.YAMLError:
+        return None
+    return str(fm.get("slug", "")).strip() or None
+
+
+_TOPIC_SECTIONS = _VALID_SECTION_HEADERS
+
+
+def _new_topic(slug: str, now: datetime.datetime) -> str:
+    sections = "\n\n".join(_TOPIC_SECTIONS)
+    # YAML-quote the slug and title so a hostile or odd slug cannot break out
+    # of the frontmatter block. yaml.safe_dump is the source of truth for the
+    # block — we write a string header manually but use safe_dump for the
+    # body so escaping is correct.
+    fm = yaml.safe_dump(
+        {"slug": slug, "title": slug, "tags": [], "status": "active"},
+        default_flow_style=False,
+        sort_keys=False,
+    )
+    return f"---\n{fm}---\n{sections}\n\n## Open actions (as of {now:%Y-%m-%d})\n"
+
+
+def _insert_in_section(content: str, section: str, text: str) -> str:
+    """Insert *text* at the end of *section* (before the next ``## `` heading or EOF).
+    If the section is absent, append it as a new section at EOF."""
+    lines = content.splitlines()
+    try:
+        start = next(i for i, ln in enumerate(lines) if ln.strip() == section.strip())
+    except StopIteration:
+        suffix = "" if content.endswith("\n") else "\n"
+        return f"{content}{suffix}\n{section}\n\n{text}\n"
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    block = lines[start:end]
+    while block and block[-1].strip() == "":
+        block.pop()
+    block.append("")
+    block.append(text)
+    new_lines = lines[:start] + block + ([""] if end < len(lines) else []) + lines[end:]
+    return "\n".join(new_lines) + ("\n" if content.endswith("\n") else "")
+
+
+def _apply_topics(notes_root: Path, topics: list, now: datetime.datetime) -> int:
+    count = 0
+    for t in topics:
+        slug = str(t.get("slug", "")).strip()
+        text = str(t.get("text", "")).strip()
+        section = str(t.get("section", "## Current state")).strip()
+        if not slug or not text or not SLUG_RE.match(slug) or not is_valid_section(section):
+            continue
+        tdir = notes_root / "topics"
+        tdir.mkdir(parents=True, exist_ok=True)
+        path = tdir / f"{slug}.md"
+        content = path.read_text(encoding="utf-8") if path.exists() else _new_topic(slug, now)
+        # Insert the new note under the requested section, then regenerate the
+        # ## Open actions snapshot so the topic's view of the task list is
+        # always current (per CONTEXT.md: "a stamped snapshot you regenerate
+        # when you edit that topic file").
+        inserted = _insert_in_section(content, section, text)
+        content = _regenerate_open_actions_block(notes_root, inserted, now)
+        path.write_text(content, encoding="utf-8")
+        count += 1
+    return count
+
+
+def _apply_meetings(notes_root: Path, meetings: list, now: datetime.datetime) -> int:
+    count = 0
+    for m in meetings:
+        slug = str(m.get("slug", "")).strip()
+        if not slug or not SLUG_RE.match(slug):
+            continue
+        day = notes_root / "meetings" / f"{now:%Y-%m-%d}"
+        day.mkdir(parents=True, exist_ok=True)
+        m_topics = list(m.get("topics") or [])
+        # Use yaml.safe_dump to render the topics list as a valid YAML block —
+        # avoids the bug where unquoted bare tokens like `topics: [a, b, c]`
+        # parse as three unrelated keys. Dumping the list directly (not a
+        # single-key dict) gives `[a, b, c]` — the expected flow form.
+        list_yaml = yaml.safe_dump(m_topics, default_flow_style=True).rstrip()
+        body = (
+            f"---\n"
+            f"date: {now:%Y-%m-%d}\n"
+            f"title: {m.get('title', slug)}\n"
+            f"topics: {list_yaml}\n"
+            f"---\n"
+            f"## Summary\n{m.get('summary', '')}\n\n"
+            f"## Decisions\n{m.get('decisions', '')}\n\n"
+            f"## Actions\n{m.get('actions', '')}\n\n"
+            f"## Raw notes\n{m.get('raw', '')}\n"
+        )
+        (day / f"{slug}.md").write_text(body, encoding="utf-8")
+        count += 1
+    return count

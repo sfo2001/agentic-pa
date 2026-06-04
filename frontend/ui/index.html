@@ -13,7 +13,7 @@
   </header>
 
   <nav class="notes-buttons">
-    <button class="action" data-prompt="Process the inbox.">Process inbox</button>
+    <button class="action" id="sweep" data-sweep="true">Sweep</button>
     <button class="action" data-prompt="Give me today's brief.">Daily brief</button>
     <button class="action" data-prompt="Run the weekly review.">Weekly review</button>
     <button id="undo" type="button">Undo last</button>
@@ -21,6 +21,28 @@
       <input id="upload" type="file" hidden>
     </label>
   </nav>
+
+  <div id="sweep-panel" hidden>
+    <div id="sweep-panel-header">Sweep proposal</div>
+    <div id="sweep-panel-body">
+      <section>
+        <h3>Diary</h3>
+        <textarea id="sweep-diary" rows="6" placeholder="(empty)"></textarea>
+      </section>
+      <section>
+        <h3>Actions</h3>
+        <ul id="sweep-actions"></ul>
+      </section>
+      <section>
+        <h3>Topics</h3>
+        <ul id="sweep-topics"></ul>
+      </section>
+    </div>
+    <div id="sweep-panel-footer">
+      <button id="sweep-confirm" type="button">Confirm</button>
+      <button id="sweep-cancel" type="button">Cancel</button>
+    </div>
+  </div>
 
   <div id="panes">
     <section id="left">

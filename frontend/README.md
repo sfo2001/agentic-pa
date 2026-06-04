@@ -1,9 +1,43 @@
 # notes-frontend — OpenCode proxy + SSE backend
 
 The sole OpenCode HTTP client for the Chief-of-Staff Notes assistant.
-Exposes `/health`, `POST /api/message`, `GET /api/events` (SSE).
+Exposes `/health`, `POST /api/message`, `GET /api/events` (SSE), and
+the **Sweep** endpoints (`POST /api/sweep`, `POST /api/sweep/confirm`)
+that turn the live conversation transcript into a confirmed Diary entry
+plus Actions/Topic updates via the propose-confirm Ingest flow (ADR-0009).
 The browser talks only to this service; OpenCode and its credentials are
 never exposed to the browser.
+
+## Diary Sweep (ADR-0009)
+
+On demand, the frontend reads the live OpenCode conversation transcript
+(since a per-session watermark in the notes git-dir's
+`.sweep-state.json` — outside the agent's `workspace/` sandbox so the
+agent can't read or write it; see ADR-0005), slices it into size-bounded
+windows, snapshots each as an `inbox/` capture, and asks the agent to
+Ingest in **PROPOSE mode** (structured JSON: `diary / actions / topics /
+meetings`). The browser shows a review panel; on **Confirm**, the
+frontend applies the (possibly edited) proposal deterministically to
+`diary/`, `tasks.todo.txt`, `topics/`, regenerates each touched topic's
+`## Open actions (as of YYYY-MM-DD)` snapshot from the current task list,
+runs housekeeping + git commit, and advances the watermark. The agent
+never writes directly during a Sweep.
+
+- `POST /api/sweep` → `{ok, proposal, capture, session, last_id}` (or
+  `{ok, proposal: null}` when nothing new)
+- `POST /api/sweep/confirm` body `{proposal, capture, session, last_id}` →
+  `{ok, applied, committed, lint}`. The body is validated by a Pydantic
+  v2 model with `Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")` on slugs,
+  `Field(max_length=…)` on list caps, and a literal-set `field_validator`
+  on topic section headings. A malformed body → **422** at the HTTP
+  boundary, not silent drop in the applier.
+
+The Diary is a backward-looking, accreted record at
+`workspace/diary/YYYY-MM-DD.md` — opposite lifecycle to the regenerated
+**Brief**. `diary/` is excluded from housekeeping (index + orphan lint)
+so it coexists without change. See
+`docs/adr/0009-propose-confirm-ingest-and-diary-sweep.md` for the full
+design.
 
 ## Run (against a running opencode serve)
 
@@ -157,14 +191,22 @@ Browser
   ├─ GET  /api/inbox       ──► counts files in notes_root/inbox/
   ├─ POST /api/upload      ──► upload.store_upload() → notes_root/documents/
   ├─ POST /api/message     ──► proxy.send()  ──► OpenCodeClient.send_message()
-  └─ GET  /api/events      ──► proxy.relay() ──► OpenCodeClient.iter_events()
-                                                │   (SSE: GET /event)
-                                                └─► OpenCodeClient.tool_calls()
-                                                        (poll: GET /session/{id}/message)
+  ├─ GET  /api/events      ──► proxy.relay() ──► OpenCodeClient.iter_events()
+  │                                              │   (SSE: GET /event)
+  │                                              └─► OpenCodeClient.tool_calls()
+  │                                                      (poll: GET /session/{id}/message)
+  ├─ POST /api/sweep       ──► proxy.transcript() + slice + propose_ingest()
+  │                          → returns {proposal, capture, session, last_id}
+  │                          (no writes; agent emits a structured JSON block)
+  └─ POST /api/sweep/confirm ──► proposal.apply_proposal() (deterministic)
+                                + sweep.archive_capture() + wiki housekeeping
+                                + versioning.commit_all() + watermark advance
 ```
 
 - **`frontend/events.py`** — pure mapper: OpenCode SSE events → browser event model
 - **`frontend/opencode_client.py`** — async HTTP client for `opencode serve`
-- **`frontend/proxy.py`** — one long-lived session, relay loop, post-idle tool fetch
+- **`frontend/proxy.py`** — one long-lived session, relay loop, post-idle tool fetch; `transcript()` + `propose_ingest()` for Sweep
+- **`frontend/sweep.py`** — per-session watermark (`.sweep-state.json`), size-bounded window slicing, capture write/archive
+- **`frontend/proposal.py`** — parse the agent's structured JSON proposal; apply it deterministically to `diary/`, `tasks.todo.txt`, `topics/`, `meetings/`
 - **`frontend/upload.py`** — `store_upload()` + `lwt_convert()` (llm-wiki-tools, adds traceability frontmatter) for office/PDF→Markdown; `markitdown_convert()` retained as a fallback
 - **`frontend/app.py`** — FastAPI app; browser-facing endpoints only

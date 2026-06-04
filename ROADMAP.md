@@ -39,6 +39,7 @@ capability is worth adding.
 | 2026-06-01 | **CI hardening** — matrix `ubuntu + windows × 3.10/3.11/3.12/3.13`, SHA-pinned actions, `pip cache`, pinned lwt-wiki install ref, non-blocking `pip-audit` job. Python floor lowered to 3.10. |
 | 2026-05-31 | **lwt-wiki integration** (ADR-0007) — document **ingest** with traceability frontmatter, **`notes_search`** (BM25 over the Ground Truth), frontend-push **lint**, and a **code-owned `index.md`**, as a conventions layer over the existing topic/meeting/task model. The read-only Agenda server broadened into the **Ground Truth service**. |
 | 2026-05-31 | **Presentation pane** (ADR-0006) — a `present_present(path)` MCP signal renders a workspace Artifact read-only beside the conversation, server-side sanitized. |
+| 2026-06-04 | **Diary Sweep** (ADR-0009) — on-demand **Sweep** that re-sources the existing **Ingest** from the live OpenCode transcript (read by the frontend; the sandboxed agent cannot) and turns a braindump into a confirmed, accreted **Diary** entry plus Actions/Topic updates. All Ingest is now **propose → confirm → write**; the agent emits a structured JSON proposal, the browser confirms/edits, and the frontend applies byte-for-byte. Boundary shift: the frontend now writes Ground-Truth *content* (not just derived structure) from confirmed proposals. `diary/` is excluded from housekeeping. |
 | (M1) | **Local-only MVP** — topic-centric Ground Truth, deterministic Agenda engine (read-only MCP), sandboxed OpenCode agent, frontend proxy + notes git versioning, one-command launcher. ADRs 0001–0005. |
 
 Architecture decisions are recorded in `docs/adr/`.
@@ -125,6 +126,44 @@ backends.
 renders them in-app.
 
 **Trigger.** A real need to publish the notes to an external audience.
+
+### Sweep idle auto-trigger
+
+**What.** Run a Sweep automatically after a period of conversation silence, so
+the user doesn't have to click the button.
+
+**Why.** Manual triggering is the friction the Sweep was designed around; once
+the Sweep has proven useful in practice, the button becomes the bottleneck.
+
+**Trigger.** Command-driven Sweep proves useful over a few weeks of real use
+*and* the cost (a structured-proposal emit per idle period) is acceptable.
+
+---
+
+### Sweep as the *sole* structurer
+
+**What.** Turn off live in-chat filing entirely; the Sweep becomes the only
+path from braindump → structured notes. The Diary accretes through the day;
+Briefs / weekly review are unchanged.
+
+**Why.** One segmentation path is easier to reason about than two. Today the
+agent can still file things during a normal turn; consolidating behind Sweep
+makes "what was proposed → what landed" auditable in one place.
+
+**Trigger.** After living with the Sweep and trusting its segmentation, *and*
+its proposals match the current in-chat Ingest quality on a real workload.
+
+---
+
+### Sweep auto-file mode
+
+**What.** A toggle that skips the confirm step (propose-confirm ⊆ auto-file).
+
+**Why.** Some captures (e.g. trivial "reminded myself to call X" entries) are
+below the review threshold; auto-file would let them land without the panel.
+
+**Trigger.** After both deferred items above ship, and the panel still
+imposes measurable friction on low-stakes captures.
 
 ---
 

@@ -87,12 +87,16 @@ def make_fake_opencode(
         Shape confirmed from GET /doc OpenAPI spec:
           [{"info": {role, id, sessionID, ...}, "parts": [Part, ...]}, ...]
 
-        If no tool_parts and no early_tool_parts configured, returns [] (empty history).
-        If tool_parts configured, returns one assistant message containing them.
-        If early_tool_parts configured, returns two assistant messages: the first
-        containing early_tool_parts (simulating a reasoning/tool-call turn), the
-        second containing a text-only part (simulating the final answer turn).
+        If app.state.transcript is set, returns that (used by Sweep tests
+        to inject a pre-canned transcript). Otherwise the original rules:
+        - early_tool_parts: two assistant messages
+        - tool_parts only: one assistant message with the tool parts
+        - final_text only: one assistant message with text
+        - else: []
         """
+        transcript = getattr(app.state, "transcript", None)
+        if transcript is not None:
+            return transcript
         if early_tool_parts:
             return [
                 {

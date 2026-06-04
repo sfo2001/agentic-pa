@@ -375,3 +375,101 @@ async def test_bh13_tool_calls_handles_null_state():
     assert len(calls) == 1
     assert calls[0]["name"] == "my_tool"
     assert isinstance(calls[0]["status"], str)
+
+
+# ── Sweep T1: transcript reader (ordered role + concatenated text) ───────────
+
+
+async def test_messages_returns_ordered_role_and_text():
+    raw = [
+        {"info": {"id": "msg_1", "role": "user"},
+         "parts": [{"type": "text", "text": "hello"}]},
+        {"info": {"id": "msg_2", "role": "assistant"},
+         "parts": [{"type": "reasoning", "text": "(thinking)"},
+                   {"type": "text", "text": "hi "}, {"type": "text", "text": "there"}]},
+    ]
+    msgs = await _client_returning(raw).messages("ses_x")
+    assert msgs == [
+        {"id": "msg_1", "role": "user", "text": "hello"},
+        {"id": "msg_2", "role": "assistant", "text": "hi there"},
+    ]
+
+
+async def test_messages_empty_on_no_messages():
+    assert await _client_returning([]).messages("ses_x") == []
+
+
+# ── Group K: messages() defense-in-depth (non-list / non-dict inputs) ────────
+
+
+async def test_messages_returns_empty_on_non_list_body():
+    """K-3: messages() must return [] (not raise) when the server returns a non-list body.
+
+    A buggy or hostile upstream could return {"messages": [...]} or "not a list".
+    The current contract: r.raise_for_status() handles non-2xx; non-list JSON is
+    treated as "no messages" so the Sweep returns "nothing new" cleanly.
+    """
+    msgs = await _client_returning({"oops": "dict not list"}).messages("ses_x")
+    assert msgs == []
+
+
+async def test_messages_skips_non_dict_messages_in_list():
+    """K-4: messages() must skip non-dict entries in the list (defense in depth).
+
+    The OpenCode spec returns a list of message dicts. A buggy server might
+    return a list with a stray int or string. The current code already handles
+    this with `if not isinstance(m, dict): continue` — this test pins the
+    behaviour so a future refactor doesn't accidentally tighten it.
+    """
+    raw = [
+        "a stray string",
+        42,
+        None,
+        {"info": {"id": "msg_1", "role": "user"},
+         "parts": [{"type": "text", "text": "kept"}]},
+    ]
+    msgs = await _client_returning(raw).messages("ses_x")
+    assert msgs == [{"id": "msg_1", "role": "user", "text": "kept"}]
+
+
+# ── L-4: messages() must cap the message count to prevent OOM ────────────────
+
+
+async def test_messages_caps_at_max_messages():
+    """L-4: messages() must refuse an oversized transcript.
+
+    A hostile or buggy local OpenCode could return 100k messages and
+    OOM the frontend (the cap is a defense-in-depth, the trust boundary
+    is the local OpenCode process — same as send_message / final_text).
+    The current contract raises on a list longer than MAX_MESSAGES.
+    """
+    import pytest as _pytest
+
+    from frontend.opencode_client import MAX_MESSAGES
+
+    # Build a raw list with MAX_MESSAGES + 1 entries.
+    raw = [{"info": {"id": f"m{i}", "role": "user"},
+            "parts": [{"type": "text", "text": "x"}]}
+           for i in range(MAX_MESSAGES + 1)]
+    with _pytest.raises(ValueError, match="too many messages"):
+        await _client_returning(raw).messages("ses_x")
+
+
+async def test_messages_accepts_exactly_max_messages():
+    """L-4 (boundary): MAX_MESSAGES messages is the upper bound inclusive."""
+    from frontend.opencode_client import MAX_MESSAGES
+
+    raw = [{"info": {"id": f"m{i}", "role": "user"},
+            "parts": [{"type": "text", "text": str(i)}]}
+           for i in range(MAX_MESSAGES)]
+    msgs = await _client_returning(raw).messages("ses_x")
+    assert len(msgs) == MAX_MESSAGES
+
+
+def _client_returning(messages):
+    def handler(request):
+        if request.url.path.endswith("/message") and request.method == "GET":
+            return httpx.Response(200, json=messages)
+        return httpx.Response(200, json={"id": "ses_x"})
+    transport = httpx.MockTransport(handler)
+    return OpenCodeClient(httpx.AsyncClient(transport=transport, base_url="http://oc"), agent="a")

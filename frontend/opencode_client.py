@@ -15,9 +15,12 @@ from collections.abc import AsyncIterator
 
 import httpx
 
+# Defense-in-depth: refuse transcripts longer than this (prevents OOM from
+# a hostile or buggy local OpenCode). 10k messages ≈ ~hours of conversation.
+MAX_MESSAGES = 10000
+
 
 class OpenCodeClient:
-    """Async HTTP client for the OpenCode serve API."""
 
     def __init__(self, http: httpx.AsyncClient, *, agent: str) -> None:
         self._http = http
@@ -162,3 +165,33 @@ class OpenCodeClient:
     async def aclose(self) -> None:
         """Close the underlying HTTP client."""
         await self._http.aclose()
+
+    async def messages(self, session_id: str) -> list[dict]:
+        """Return the ordered transcript as ``[{"id", "role", "text"}]``.
+
+        Concatenates the ``text`` parts of each message (ignoring reasoning/tool
+        parts). Used by the Sweep to read the braindump. Returns [] on no messages.
+        Raises ``ValueError`` if the server returns more than ``MAX_MESSAGES``
+        entries (defense-in-depth against OOM).
+        """
+        r = await self._http.get(f"/session/{session_id}/message")
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, list):
+            return []
+        if len(data) > MAX_MESSAGES:
+            raise ValueError(
+                f"too many messages ({len(data)} > {MAX_MESSAGES})"
+            )
+        out: list[dict] = []
+        for m in data:
+            if not isinstance(m, dict):
+                continue
+            info = m.get("info", {})
+            text = "".join(
+                part.get("text", "")
+                for part in m.get("parts", [])
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+            out.append({"id": info.get("id", ""), "role": info.get("role", ""), "text": text})
+        return out
