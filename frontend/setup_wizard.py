@@ -219,6 +219,17 @@ def launch_command(install_root: str, *, windows: bool) -> str:
 
 
 def main() -> int:
+    from bootstrap_env import EnvSpec, preflight_env
+
+    preflight_env([
+        EnvSpec(
+            "COS_PYSITE", default="",
+            hint=(
+                "internal handoff from install.py in target mode: absolute path "
+                "to <repo>/.pysite, baked into MCP servers' PYTHONPATH"
+            ),
+        ),
+    ])
     print("=== Chief-of-Staff Notes — setup ===\n")
 
     blocking, warnings = check_environment()

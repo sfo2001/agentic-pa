@@ -148,6 +148,27 @@ def _wait_health(url: str, timeout: float = 30.0, password: str | None = None) -
 
 
 def main() -> int:
+    from bootstrap_env import EnvSpec, preflight_env
+
+    preflight_env([
+        EnvSpec(
+            "INSTALL_ROOT",
+            default=str(Path.home() / "cos-notes"),
+            hint=(
+                "install root created by setup.cmd/setup.sh; default "
+                "$HOME/cos-notes if unset, but the launcher will error if "
+                "workspace/ and notes.git/ are missing"
+            ),
+        ),
+        EnvSpec(
+            "OPENCODE_PORT", default="4096", parser=int,
+            hint="port the opencode server listens on (must be an integer)",
+        ),
+        EnvSpec(
+            "WEB_PORT", default="8000", parser=int,
+            hint="port the FastAPI frontend listens on (must be an integer)",
+        ),
+    ])
     install_root = Path(os.environ.get("INSTALL_ROOT", Path.home() / "cos-notes")).resolve()
     workspace = install_root / "workspace"
     git_dir = install_root / "notes.git"

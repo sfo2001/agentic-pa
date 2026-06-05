@@ -75,6 +75,21 @@ def try_make_venv() -> bool:
 
 
 def main() -> int:
+    from bootstrap_env import EnvSpec, preflight_env
+
+    preflight_env([
+        EnvSpec(
+            "SETUP_MODE", default="",
+            hint=(
+                "force install mode: 'target' for AppLocker-restricted Windows "
+                "boxes, empty to auto-detect (venv-or-target probe)"
+            ),
+        ),
+        EnvSpec(
+            "LLM_WIKI_TOOLS", default=str(REPO.parent / "llm-wiki-tools"),
+            hint="absolute path to the llm-wiki-tools sibling checkout (required)",
+        ),
+    ])
     lwt = _lwt_path()
     forced = forced_target(os.environ)
     venv_ok = False if forced else try_make_venv()

@@ -267,15 +267,28 @@ def test_bh31_config_permissions_dict_copy_has_no_effect():
     assert cfg["agent"]["workspace-assistant"]["permission"]["bash"] == "deny"
 
 
-def test_build_default_app_requires_notes_git_dir(monkeypatch):
+def test_build_default_app_requires_notes_git_dir(monkeypatch, capsys):
     """When NOTES_GIT_DIR is unset, build_default_app must refuse to start —
     otherwise the notes .git would be created inside the agent's sandbox,
-    breaking confinement (ADR-0005)."""
+    breaking confinement (ADR-0005).
+
+    The preflight layer (ADR-0010) is the authoritative check now: required
+    + unset → sys.exit(2), with a per-shell "how to set" hint. The preflight
+    replaces the older RuntimeError guard; this test pins the new contract."""
     import frontend.app as app_mod
 
     monkeypatch.delenv("NOTES_GIT_DIR", raising=False)
-    with pytest.raises(RuntimeError, match="NOTES_GIT_DIR"):
+    with pytest.raises(SystemExit) as exc_info:
         app_mod.build_default_app()
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "NOTES_GIT_DIR" in err
+    assert "REQUIRED" in err
+    # Pre-flight includes the (now) per-platform hint. POSIX: bash + powershell.
+    if os.name == "nt":
+        assert "set NOTES_GIT_DIR=" in err
+    else:
+        assert "export NOTES_GIT_DIR=" in err
 
 
 # ── BH-06: FastAPI lifespan must close the proxy on shutdown ────────────────

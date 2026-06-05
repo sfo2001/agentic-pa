@@ -303,16 +303,37 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
 
 
 def build_default_app() -> FastAPI:
+    from bootstrap_env import EnvSpec, preflight_env
+
+    preflight_env([
+        EnvSpec(
+            "OPENCODE_BASE_URL", default="http://127.0.0.1:4096",
+            parser=lambda v: (
+                v if v.startswith(("http://", "https://")) else
+                (_ for _ in ()).throw(
+                    ValueError(f"must start with http:// or https:// (got {v!r})")
+                )
+            ),
+            hint="base URL of the running opencode server (set by launcher/run.py)",
+        ),
+        EnvSpec(
+            "NOTES_ROOT", default=".",
+            hint="absolute path to the workspace/ directory (set by launcher/run.py)",
+        ),
+        EnvSpec(
+            "NOTES_GIT_DIR", required=True,
+            hint=(
+                "absolute path to the split git-dir outside NOTES_ROOT "
+                "(ADR-0005). Without it the notes .git would be created inside "
+                "the agent's workspace/ sandbox, breaking confinement. "
+                "Normally set by launcher/run.py."
+            ),
+        ),
+    ])
     base = os.environ.get("OPENCODE_BASE_URL", "http://127.0.0.1:4096")
     notes_root = os.environ.get("NOTES_ROOT", ".")
     git_dir_env = os.environ.get("NOTES_GIT_DIR")
-    if not git_dir_env:
-        raise RuntimeError(
-            "NOTES_GIT_DIR must be set to the split git-dir outside the sandbox "
-            "(e.g. <install-root>/notes.git). Start via launcher/run.py, or set it "
-            "explicitly. Without it the notes .git would be created inside the "
-            "agent's workspace/ sandbox, breaking confinement (ADR-0005)."
-        )
+    assert git_dir_env is not None  # guaranteed by preflight_env(required=True) above
     git_dir = Path(git_dir_env)
     oc = OpenCodeClient.connect(base, agent="workspace-assistant")
     return create_app(NotesProxy(oc), notes_root=notes_root, git_dir=git_dir)

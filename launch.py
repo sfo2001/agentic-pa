@@ -17,6 +17,17 @@ REPO = Path(__file__).resolve().parent
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    bootstrap_env.preflight_env([
+        bootstrap_env.EnvSpec(
+            "INSTALL_ROOT",
+            default=str(Path.home() / "cos-notes"),
+            hint=(
+                "install root created by setup.cmd/setup.sh; default "
+                "$HOME/cos-notes if unset, but the launcher will error if "
+                "workspace/ and notes.git/ are missing"
+            ),
+        ),
+    ])
     interp, env_overrides = bootstrap_env.resolve_launch(REPO)
     env = {**os.environ, **env_overrides}
     return subprocess.run(
