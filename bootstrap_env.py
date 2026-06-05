@@ -89,9 +89,10 @@ class EnvSpec:
             ⇒ the value is missing-but-tolerable (warn and continue).
         hint: Optional one-line context appended to the ``! VAR:`` warning
             (e.g. "set INSTALL_ROOT to the install root created by setup").
-        secret: If ``True``, a value that parsed OK is masked in the table
-            output (e.g. an API key). Failure states still show the raw value
-            because hiding a bad secret would defeat the purpose.
+        secret: If ``True``, the value is masked in every stderr path — the
+            OK table row *and* a parse-failure row — and a parse-failure
+            suppresses the parser's exception text (which can echo the value).
+            Masking is presentation-only (ADR-0010 "Could age badly").
     """
     name: str
     default: str | None = None
@@ -113,22 +114,34 @@ def _mask_secret(value: str) -> str:
     return f"{value[:2]}****{value[-2:]}"
 
 
+def _powershell_quote(value: str) -> str:
+    """Quote *value* for PowerShell ``$env:VAR = ...`` assignment.
+
+    PowerShell single-quote strings escape embedded single quotes by doubling
+    them (``'it''s'``). This is correct for path values, API keys, etc."""
+    return "'" + value.replace("'", "''") + "'"
+
+
 def _shell_hints(name: str, value: str) -> list[str]:
     """Return per-shell ``set VAR=...`` lines, in the order most users read.
 
     On Windows: cmd, then PowerShell, then bash (covers WSL / git-bash users).
-    On POSIX: bash first, then PowerShell (Core) as the secondary. Each line
-    is quoted via ``shlex.quote`` so values with spaces / metacharacters round-trip."""
+    On POSIX: bash first, then PowerShell (Core) as the secondary.
+
+    Bash lines are quoted via ``shlex.quote``; PowerShell lines use
+    single-quote escaping (see ``_powershell_quote``). Cmd lines use double
+    quotes around ``name=value`` so values with spaces round-trip."""
     quoted = shlex.quote(value)
+    ps_quoted = _powershell_quote(value)
     if os.name == "nt":
         return [
-            f"  → cmd:        set {name}={value}",
-            f"  → powershell: $env:{name} = {quoted}",
+            f'  → cmd:        set "{name}={value}"',
+            f"  → powershell: $env:{name} = {ps_quoted}",
             f"  → bash:       export {name}={quoted}",
         ]
     return [
         f"  → bash:       export {name}={quoted}",
-        f"  → powershell: $env:{name} = {quoted}",
+        f"  → powershell: $env:{name} = {ps_quoted}",
     ]
 
 
@@ -169,7 +182,7 @@ def preflight_env(specs: list[EnvSpec]) -> None:
         if is_unset:
             # spec.default is not None here — the (unset, default=None) case
             # was already filtered out via `continue` above.
-            value = spec.default or ""
+            value = spec.default if spec.default is not None else ""
             source = "(default)"
         else:
             # !is_unset means raw is a non-empty string; pin the type for mypy.
@@ -185,7 +198,15 @@ def preflight_env(specs: list[EnvSpec]) -> None:
                 has_issue = True
                 if spec.required:
                     has_fatal = True
-                rows.append((spec, "parse-fail", value, f"PARSE FAILED: {exc}"))
+                # For a secret, suppress the parser's exception text — it can
+                # echo the raw value (e.g. "...got 'sk-…'"). Non-secrets keep
+                # the detail to aid debugging.
+                detail = (
+                    "PARSE FAILED (value hidden)"
+                    if spec.secret
+                    else f"PARSE FAILED: {exc}"
+                )
+                rows.append((spec, "parse-fail", value, detail))
                 continue
 
         rows.append((spec, "ok", value, source))
@@ -197,8 +218,10 @@ def preflight_env(specs: list[EnvSpec]) -> None:
     label = "issue" if has_issue and not has_fatal else "fatal issue"
     print(f"Environment ({label}):", file=sys.stderr)
     for spec, status, value, source in rows:
+        # Mask a secret's value on any row that carries a real value (OK or
+        # parse-fail); "(unset)" rows have no secret to hide.
         display = value
-        if status == "ok" and spec.secret:
+        if spec.secret and status in ("ok", "parse-fail"):
             display = _mask_secret(value)
         print(f"  {spec.name:<18}= {display:<48} ({source})", file=sys.stderr)
     print(file=sys.stderr)

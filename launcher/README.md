@@ -36,10 +36,15 @@ first so that `<INSTALL_ROOT>/workspace/` exists.
 | Variable | Default | Purpose |
 |---|---|---|
 | `INSTALL_ROOT` | `~/cos-notes` | Root of the installed notes tree. `workspace/` and `notes.git` live inside here. |
-| `OPENCODE_PORT` | `4096` | Port for the OpenCode server (`opencode serve`). |
-| `WEB_PORT` | `8000` | Port for the FastAPI frontend (uvicorn). |
+| `OPENCODE_PORT` | `4096` | Port for the OpenCode server (`opencode serve`). Preflight-validated as an integer in 1–65535. |
+| `WEB_PORT` | `8000` | Port for the FastAPI frontend (uvicorn). Preflight-validated as an integer in 1–65535. |
 | `PYTHON` | `py`/`python3` | Override the base interpreter the `setup.*` / `run.*` shims use before handing off to `install.py` / `launch.py`. |
 | `SETUP_MODE` | _(unset)_ | Set to `target` to force the venv-less `pip install --target .pysite` install path (e.g. on an AppLocker-restricted Windows box). Read by the `setup.*` shims. |
+| `LLM_WIKI_TOOLS` | `../llm-wiki-tools` | Absolute path to the sibling `llm-wiki-tools` checkout. Surfaced by the `install.py` preflight. |
+| `NOTES_GIT_DIR` | _(required)_ | Split git-dir for the notes audit repo (e.g. `<INSTALL_ROOT>/notes.git`), outside the `workspace/` sandbox. **Required** by `frontend/app.py` — start fails with `SystemExit(2)` if unset; normally set by the launcher (ADR-0005). |
+| `NOTES_ROOT` | `.` | Root of the notes tree the frontend serves. Surfaced by the `frontend/app.py` preflight. |
+| `OPENCODE_BASE_URL` | `http://127.0.0.1:4096` | Base URL the frontend uses to reach `opencode serve`. Preflight-validated as an `http`/`https` URL. |
+| `COS_PYSITE` | _(unset)_ | Internal handoff from `install.py` in target/venv-less mode — the absolute `.pysite` path. Surfaced by the `setup_wizard` preflight. |
 
 ## Pre-flight checks (abort if any fail)
 

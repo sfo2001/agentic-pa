@@ -267,6 +267,18 @@ def test_bh31_config_permissions_dict_copy_has_no_effect():
     assert cfg["agent"]["workspace-assistant"]["permission"]["bash"] == "deny"
 
 
+def test_opencode_base_url_parser_valid():
+    """The ``_validate_url`` parser accepts http:// and https:// with a valid host."""
+    from frontend.app import _validate_url
+
+    _validate_url("http://localhost:4096")
+    _validate_url("https://secure.example.com:443")
+    _validate_url("http://127.0.0.1:8000")
+    for bad in ("ftp://host", "//relative", "localhost:4096", "http:/bad", "http://", "https://"):
+        with pytest.raises(ValueError, match="must be a valid http:// or https:// URL"):
+            _validate_url(bad)
+
+
 def test_build_default_app_requires_notes_git_dir(monkeypatch, capsys):
     """When NOTES_GIT_DIR is unset, build_default_app must refuse to start —
     otherwise the notes .git would be created inside the agent's sandbox,
@@ -286,7 +298,7 @@ def test_build_default_app_requires_notes_git_dir(monkeypatch, capsys):
     assert "REQUIRED" in err
     # Pre-flight includes the (now) per-platform hint. POSIX: bash + powershell.
     if os.name == "nt":
-        assert "set NOTES_GIT_DIR=" in err
+        assert 'set "NOTES_GIT_DIR=' in err
     else:
         assert "export NOTES_GIT_DIR=" in err
 

@@ -16,9 +16,16 @@ REPO = Path(__file__).resolve().parent
 
 
 def main(argv: list[str] | None = None) -> int:
+    from bootstrap_env import EnvSpec, preflight_env
+
     argv = list(sys.argv[1:] if argv is None else argv)
-    bootstrap_env.preflight_env([
-        bootstrap_env.EnvSpec(
+    # INSTALL_ROOT is surfaced here only for an early, friendly hint at this
+    # entry point. The authoritative consumer/validator is `launcher/run.py`
+    # (which this delegates to and which re-runs the preflight); launch.py
+    # itself never reads INSTALL_ROOT — it forwards the whole os.environ to the
+    # launcher subprocess below.
+    preflight_env([
+        EnvSpec(
             "INSTALL_ROOT",
             default=str(Path.home() / "cos-notes"),
             hint=(

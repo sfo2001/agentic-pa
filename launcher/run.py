@@ -147,6 +147,14 @@ def _wait_health(url: str, timeout: float = 30.0, password: str | None = None) -
     return False
 
 
+def _port_parser(v: str) -> int:
+    """Validate *v* is an integer in the valid port range 1–65535."""
+    p = int(v)
+    if not 1 <= p <= 65535:
+        raise ValueError(f"port must be 1–65535, got {p}")
+    return p
+
+
 def main() -> int:
     from bootstrap_env import EnvSpec, preflight_env
 
@@ -161,19 +169,19 @@ def main() -> int:
             ),
         ),
         EnvSpec(
-            "OPENCODE_PORT", default="4096", parser=int,
-            hint="port the opencode server listens on (must be an integer)",
+            "OPENCODE_PORT", default="4096", parser=_port_parser,
+            hint="port the opencode server listens on (must be an integer, 1–65535)",
         ),
         EnvSpec(
-            "WEB_PORT", default="8000", parser=int,
-            hint="port the FastAPI frontend listens on (must be an integer)",
+            "WEB_PORT", default="8000", parser=_port_parser,
+            hint="port the FastAPI frontend listens on (must be an integer, 1–65535)",
         ),
     ])
-    install_root = Path(os.environ.get("INSTALL_ROOT", Path.home() / "cos-notes")).resolve()
+    install_root = Path(os.environ.get("INSTALL_ROOT") or str(Path.home() / "cos-notes")).resolve()
     workspace = install_root / "workspace"
     git_dir = install_root / "notes.git"
-    oc_port = int(os.environ.get("OPENCODE_PORT", "4096"))
-    web_port = int(os.environ.get("WEB_PORT", "8000"))
+    oc_port = int(os.environ.get("OPENCODE_PORT") or "4096")
+    web_port = int(os.environ.get("WEB_PORT") or "8000")
 
     # ---- pre-flight -------------------------------------------------------
     missing = require_tools(["opencode"])
@@ -227,7 +235,7 @@ def main() -> int:
     # other local processes/users cannot drive the sandboxed agent (design §8).
     oc_password = secrets.token_urlsafe(32)
 
-    procs: list[subprocess.Popen] = []
+    procs: list[subprocess.Popen[bytes]] = []
     oc_log = None
     try:
         oc_env = isolated_env(install_root)
@@ -272,13 +280,13 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\nShutting down…")
     finally:
-        for p in reversed(procs):
-            p.terminate()
-        for p in reversed(procs):
+        for proc in reversed(procs):
+            proc.terminate()
+        for proc in reversed(procs):
             try:
-                p.wait(timeout=10)
+                proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                p.kill()
+                proc.kill()
         if oc_log is not None:
             oc_log.close()
     return 0

@@ -302,18 +302,21 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
     return app
 
 
+def _validate_url(v: str) -> str:
+    from urllib.parse import urlparse
+    parsed = urlparse(v)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"must be a valid http:// or https:// URL (got {v!r})")
+    return v
+
+
 def build_default_app() -> FastAPI:
     from bootstrap_env import EnvSpec, preflight_env
 
     preflight_env([
         EnvSpec(
             "OPENCODE_BASE_URL", default="http://127.0.0.1:4096",
-            parser=lambda v: (
-                v if v.startswith(("http://", "https://")) else
-                (_ for _ in ()).throw(
-                    ValueError(f"must start with http:// or https:// (got {v!r})")
-                )
-            ),
+            parser=_validate_url,
             hint="base URL of the running opencode server (set by launcher/run.py)",
         ),
         EnvSpec(
@@ -333,7 +336,8 @@ def build_default_app() -> FastAPI:
     base = os.environ.get("OPENCODE_BASE_URL", "http://127.0.0.1:4096")
     notes_root = os.environ.get("NOTES_ROOT", ".")
     git_dir_env = os.environ.get("NOTES_GIT_DIR")
-    assert git_dir_env is not None  # guaranteed by preflight_env(required=True) above
+    if not git_dir_env:
+        raise AssertionError("NOTES_GIT_DIR guaranteed by preflight_env(required=True)")
     git_dir = Path(git_dir_env)
     oc = OpenCodeClient.connect(base, agent="workspace-assistant")
     return create_app(NotesProxy(oc), notes_root=notes_root, git_dir=git_dir)

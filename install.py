@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import bootstrap_env
@@ -21,7 +22,7 @@ REPO = Path(__file__).resolve().parent
 LOCAL_PKGS = [str(REPO / "agenda"), str(REPO / "frontend"), str(REPO / "presenter")]
 
 
-def forced_target(env: dict) -> bool:
+def forced_target(env: Mapping[str, str]) -> bool:
     """True iff the operator forced target mode via ``SETUP_MODE=target``."""
     return env.get("SETUP_MODE", "").strip().lower() == "target"
 
