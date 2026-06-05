@@ -3,6 +3,11 @@
 line-length = 100
 target-version = "py310"
 
+# .cmd / .sh / .ps1 — these are platform shims, not Python. Ruff has no
+# grammar for them and will report spurious parse errors. Their structure
+# is covered by structural tests (see tests/launcher/test_preflight_env.py).
+extend-exclude = ["*.cmd", "*.sh", "*.ps1"]
+
 [lint]
 select = ["E", "F", "I", "UP", "B"]
 # E501: line length is advisory (long error strings / signatures); `ruff format`

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -209,3 +210,37 @@ def test_preflight_mixed_ok_and_failing_prints_full_table(monkeypatch, capsys):
     # And their failure sources
     assert "PARSE FAILED" in err
     assert "REQUIRED" in err
+
+
+# ── shim structural checks (Windows .cmd files) ─────────────────────────────
+
+
+@pytest.mark.parametrize("shim_name", ["setup.cmd", "run.cmd"])
+def test_windows_shims_probe_for_py_launcher(shim_name):
+    """The Windows cmd shims must fail loud if the ``py`` launcher is missing,
+    rather than letting the user's shell emit a generic "'py' is not recognized"
+    that doesn't mention the fix.
+
+    This is a structural test — we read the file and assert the probe exists.
+    The actual behavior (exit 1 on missing py) is only verifiable on Windows,
+    but the static check catches the regression where someone removes the probe
+    while refactoring the shim."""
+    repo_root = Path(__file__).resolve().parents[2]
+    shim = repo_root / shim_name
+    assert shim.is_file(), f"shim {shim_name} not found at {shim}"
+    text = shim.read_text(encoding="utf-8")
+    assert "where py" in text, (
+        f"{shim_name} is missing the `where py` probe; users on a Windows box "
+        "without the Python launcher will see a generic 'not recognized' error "
+        "instead of a fix-it hint."
+    )
+    # The remediation message text is a stable substring; allow for the shim
+    # echoing it with or without literal quotes around 'py'.
+    assert "launcher not found" in text, (
+        f"{shim_name} is missing the remediation message; users won't know to "
+        "install Python from python.org or set PYTHON=…"
+    )
+    # Both shims share the same probe block; assert both forms appear.
+    assert "PYTHON=C:\\path\\to\\python.exe" in text, (
+        f"{shim_name} is missing the PYTHON=... override hint"
+    )
