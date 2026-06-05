@@ -154,8 +154,17 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
         if not window:
             return {"ok": True, "proposal": None, "capture": None}
         stamp = sweep.make_capture_stamp()
-        capture = sweep.write_capture(notes_root, sweep.render_window_text(window), stamp=stamp)
+        capture: Path | None = None
         try:
+            # write_capture and propose_ingest both live inside the same
+            # try/finally. If write_capture itself raises (disk full, race
+            # with a concurrent delete) the capture is never created and
+            # the finally short-circuits via ``capture is None``. Otherwise
+            # the finally unconditionally archives the capture on every
+            # exit — including the happy path — so the lead abandon
+            # scenario (sweep → look → "not now" → close the panel) does
+            # not leave the capture in inbox/ and inflate the inbox badge.
+            capture = sweep.write_capture(notes_root, sweep.render_window_text(window), stamp=stamp)
             text = await proxy.propose_ingest(f"inbox/{capture.name}")
             prop = proposal.parse_proposal(text)
         except SessionLost:
@@ -163,11 +172,25 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
         except proposal.ProposalError as exc:
             # Drop the raw agent text from the response (it can include the
             # user's braindump, action text, etc.). The 502 body is fixed text
-            # only — the raw text is logged server-side for debugging.
+            # only.
             return JSONResponse(
                 status_code=502,
                 content={"ok": False, "error": f"bad proposal: {exc}"},
             )
+        finally:
+            # M1: /api/sweep owns the capture's lifetime. The capture is
+            # archived on every exit where it was successfully written
+            # (happy path, 502, 503-inner) so the lead abandon scenario
+            # — sweep → no /confirm — does not orphan the capture. If
+            # write_capture itself failed, capture is still None and the
+            # block is a no-op. archive_capture failures (OSError) are
+            # swallowed: best-effort cleanup must not mask the original
+            # error.
+            if capture is not None:
+                try:
+                    sweep.archive_capture(notes_root, capture)
+                except OSError:
+                    pass
         # Stash the window's last id on the proposal so confirm can advance the watermark.
         return {
             "ok": True,
@@ -179,10 +202,14 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
 
     @app.post("/api/sweep/confirm")
     async def post_sweep_confirm(body: SweepConfirm):
-        # Resolve + path-confine the capture filename before doing anything
-        # destructive. A hostile or buggy client could otherwise supply
-        # ``body.capture = "../opencode.json"`` and have archive_capture
-        # move an arbitrary file under notes_root into archive/.
+        # Resolve + path-confine the capture filename. /confirm does not
+        # read or move the capture file itself (the capture was already
+        # archived by /api/sweep on its happy/error path — see the
+        # ``finally`` block in ``post_sweep``); this validation is defense
+        # in depth so any future /confirm that does touch the file
+        # inherits the same guard against a hostile or buggy client
+        # supplying ``body.capture = "../opencode.json"`` and walking out
+        # of inbox/.
         notes_root_resolved = notes_root.resolve()
         inbox_dir = (notes_root_resolved / "inbox").resolve()
         cap_name = (body.capture or "").strip()
@@ -206,8 +233,6 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
         prop_dict = body.proposal.model_dump()
         async with git_lock:
             summary = proposal.apply_proposal(notes_root, prop_dict)
-            if cap_path.exists():
-                sweep.archive_capture(notes_root, cap_path)
             # Advance the watermark BEFORE committing: a failed watermark
             # write (disk full / permission) means the next sweep would
             # re-process the same window, creating duplicate actions. By

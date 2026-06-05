@@ -218,12 +218,14 @@ def test_apply_actions_strips_newline_injection():
     assert lines[0].startswith("(B) ")
 
 
-def test_apply_actions_strips_literal_backslash_n():
-    """M-5: A literal two-char ``\\n`` (backslash-n) is flattened to space.
+def test_apply_actions_preserves_literal_backslash_n():
+    """M-4: A literal two-char ``\\n`` (backslash-n) is preserved as text.
 
-    The LLM might emit the escape sequence as a string (rather than a real
-    newline byte) in its JSON output. The sanitizer must strip both forms
-    so neither can smuggle a second line into tasks.todo.txt.
+    The sanitizer strips real control characters but does NOT strip the
+    two-character escape sequence ``\n`` (backslash + n) — that is
+    legitimate content (e.g. a Windows path ``C:\\new``). A literal
+    backslash-n cannot smuggle a line break into tasks.todo.txt because
+    the file format splits on real newline bytes, not on the text ``\n``.
     """
     root = _root()
     proposal.apply_proposal(
@@ -234,9 +236,10 @@ def test_apply_actions_strips_literal_backslash_n():
     )
     body = (root / "tasks.todo.txt").read_text(encoding="utf-8")
     lines = body.splitlines()
-    # Only one line, the smuggled (A) was flattened (the literal \n is
-    # rendered as a space, not as a newline byte).
+    # Still one line (no real newline injected), but the literal \n text
+    # survives — it is not flattened.
     assert len(lines) == 1
+    assert "\\n(A) smuggled" in lines[0]
     assert lines[0].startswith("(B) ")
 
 
@@ -514,3 +517,203 @@ def test_apply_proposal_rejects_non_dict():
     root = _root()
     with pytest.raises(proposal.ProposalValidationError, match="proposal is not a dict"):
         proposal.apply_proposal(root, "not a dict")
+
+
+# ── M2: apply_proposal snapshot/rollback contract ────────────────────────────
+
+
+def test_apply_proposal_rolls_back_on_topics_failure(monkeypatch):
+    """M2 HIGH: when ``_apply_topics`` raises mid-apply, every snapshotted
+    file is restored to its pre-apply byte-for-byte state, newly-created
+    files are unlinked, and the original exception propagates.
+
+    The apply order is diary → actions → topics → meetings; we inject the
+    failure at topics so the diary write and the actions append have
+    already landed and need to be rolled back.
+    """
+    import frontend.proposal as proposal_mod
+
+    root = _root()
+    (root / "tasks.todo.txt").write_text("OLD line\n", encoding="utf-8")
+    diary_path = root / "diary" / "2026-06-04.md"
+    topic_path = root / "topics" / "atlas.md"
+
+    def _boom(_notes_root, _topics, _now):
+        raise RuntimeError("simulated topics failure")
+
+    monkeypatch.setattr(proposal_mod, "_apply_topics", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated topics failure"):
+        proposal.apply_proposal(
+            root,
+            {"diary": "first sweep", "actions": ["(B) new +x upd:2026-06-04"],
+             "topics": [{"slug": "atlas", "section": "## Current state", "text": "x"}],
+             "meetings": []},
+            now=datetime.datetime(2026, 6, 4, 14, 30),
+        )
+
+    # tasks.todo.txt: pre-existing file, content restored byte-for-byte.
+    assert (root / "tasks.todo.txt").read_text(encoding="utf-8") == "OLD line\n"
+    # diary/<today>.md: newly created by _append_diary, must be unlinked.
+    assert not diary_path.exists()
+    # topics/atlas.md: never created because _apply_topics raised before writing.
+    assert not topic_path.exists()
+    # No orphan parent directories left behind.
+    assert not (root / "diary").exists()
+    # The summary is not returned on failure (the call raised).
+
+
+def test_apply_proposal_rolls_back_meetings_when_present(monkeypatch):
+    """M2 MEDIUM: meeting files are now snapshotted too — if _apply_meetings
+    fails after a meeting has been written, the meeting file is unlinked and
+    its parent day dir is cleaned up iff it didn't exist before.
+    """
+    import frontend.proposal as proposal_mod
+
+    root = _root()
+    day_dir = root / "meetings" / "2026-06-04"
+    meeting_path = day_dir / "atlas-sync.md"
+
+    def _boom(_notes_root, _meetings, _now):
+        raise RuntimeError("simulated meetings failure")
+
+    monkeypatch.setattr(proposal_mod, "_apply_meetings", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated meetings failure"):
+        proposal.apply_proposal(
+            root,
+            {"diary": "", "actions": [],
+             "topics": [],
+             "meetings": [{"slug": "atlas-sync", "title": "Atlas sync",
+                            "summary": "x", "decisions": "", "actions": "", "raw": ""}]},
+            now=datetime.datetime(2026, 6, 4, 14, 30),
+        )
+    # The meeting file was never created (the raise fired before write_text).
+    assert not meeting_path.exists()
+    # The day dir was never created, so there's nothing to rmdir.
+    assert not day_dir.exists()
+
+
+def test_apply_proposal_rolls_back_preexisting_meeting_on_partial_failure(monkeypatch):
+    """M2 MEDIUM (deep): if the meetings list contains a slug whose file
+    ALREADY exists (overwrite case) and a later meeting raises, the
+    pre-existing file is restored byte-for-byte by the rollback.
+    """
+    import frontend.proposal as proposal_mod
+
+    root = _root()
+    day_dir = root / "meetings" / "2026-06-04"
+    day_dir.mkdir(parents=True)
+    existing_path = day_dir / "atlas-sync.md"
+    original_body = "---\ndate: 2026-06-04\ntitle: ORIGINAL\n---\n## Summary\nold\n"
+    existing_path.write_text(original_body, encoding="utf-8")
+
+    # Create a second meeting in the SAME apply that will fail — but the
+    # current `_apply_meetings` loops sequentially; if the second iteration
+    # raises, the first iteration's write must be rolled back.
+    real_apply = proposal_mod._apply_meetings
+    calls = {"n": 0}
+
+    def _explode_on_second(notes_root, meetings, now):
+        for m in meetings:
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("simulated second-meeting failure")
+            # Use the real function for the first call so the file lands.
+            return_value = real_apply(notes_root, [m], now)
+        return return_value
+
+    monkeypatch.setattr(proposal_mod, "_apply_meetings", _explode_on_second)
+
+    with pytest.raises(RuntimeError, match="simulated second-meeting failure"):
+        proposal.apply_proposal(
+            root,
+            {"diary": "", "actions": [],
+             "topics": [],
+             "meetings": [
+                 {"slug": "atlas-sync", "title": "Atlas sync",
+                  "summary": "first", "decisions": "", "actions": "", "raw": ""},
+                 {"slug": "ops-sync", "title": "Ops sync",
+                  "summary": "second", "decisions": "", "actions": "", "raw": ""},
+             ]},
+            now=datetime.datetime(2026, 6, 4, 14, 30),
+        )
+    # The pre-existing file is restored to its original content.
+    assert existing_path.read_text(encoding="utf-8") == original_body
+
+
+# ── LOW: safe_topics / safe_meetings defensive branches (the new trust
+#    boundary after M3 removed the in-apply re-checks) ────────────────────────
+
+
+@pytest.mark.parametrize("bad_topic", [
+    None,                                            # non-dict
+    "not a dict",                                    # non-dict (str)
+    {"slug": "", "section": "## Current state", "text": "x"},   # empty slug
+    {"slug": "ok", "section": "## Current state", "text": ""},   # empty text
+    {"slug": "../etc", "section": "## Current state", "text": "x"},  # bad slug
+    {"slug": "ok", "section": "## Evil", "text": "x"},            # bad section
+    {"slug": "ok", "section": "## Current state"},               # missing text
+])
+def test_safe_topics_drops_malformed_items(bad_topic):
+    """LOW: M3 removed the in-apply re-checks; the *only* validation layer
+    for topics is now ``safe_topics`` in ``apply_proposal``. Each of these
+    inputs must be silently dropped, leaving ``summary["topics"] == 0``.
+    """
+    root = _root()
+    summary = proposal.apply_proposal(
+        root,
+        {"diary": "", "actions": [], "meetings": [], "topics": [bad_topic]},
+        now=datetime.datetime(2026, 6, 4),
+    )
+    assert summary["topics"] == 0
+    assert not (root / "topics").exists()
+
+
+@pytest.mark.parametrize("bad_meeting", [
+    None,
+    "not a dict",
+    {},  # missing slug
+    {"slug": "", "title": "x"},
+    {"slug": "../etc", "title": "evil"},
+    {"slug": "ok/with/slash"},
+    {"slug": "ok with space"},
+])
+def test_safe_meetings_drops_malformed_items(bad_meeting):
+    """LOW: same coverage for the meeting trust boundary. Note: ``{"slug": "ok"}``
+    alone IS a valid meeting (title defaults to slug) so it is not in this list;
+    the unit tests above (``test_apply_meeting_writes_record_in_exact_format``)
+    pin the positive path."""
+    root = _root()
+    summary = proposal.apply_proposal(
+        root,
+        {"diary": "", "actions": [], "topics": [], "meetings": [bad_meeting]},
+        now=datetime.datetime(2026, 6, 4),
+    )
+    assert summary["meetings"] == 0
+    assert not (root / "meetings").exists()
+
+
+# ── LOW: M4 motivating example pinned with a real Windows path ───────────────
+
+
+def test_apply_actions_preserves_windows_path_with_backslashes():
+    """LOW: the M4 commit message cites ``C:\\new`` as the motivating case
+    for dropping the ``\\[nrt]`` alternation. Pin the documented contract
+    with a real Windows-path input: a literal backslash-letter sequence in
+    a path survives end-to-end, and the action is still a single line.
+    """
+    root = _root()
+    proposal.apply_proposal(
+        root,
+        {"diary": "", "actions": ["(B) deploy to C:\\new\\release +ops upd:2026-06-04"],
+         "topics": [], "meetings": []},
+        now=datetime.datetime(2026, 6, 4),
+    )
+    body = (root / "tasks.todo.txt").read_text(encoding="utf-8")
+    lines = body.splitlines()
+    assert len(lines) == 1
+    # The Windows path survives verbatim — both backslashes and the \r/\t/\n
+    # *text* in any extension are preserved.
+    assert "C:\\new\\release" in lines[0]
+    assert lines[0].startswith("(B) ")

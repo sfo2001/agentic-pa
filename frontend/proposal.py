@@ -13,6 +13,8 @@ from pathlib import Path
 
 import yaml
 
+from frontend import _atomic
+
 # Slugs: lowercase alnum + hyphen/underscore; 1-64 chars; no path separators.
 # Reject anything that could become a path component (no '.', '/', '\\', '..').
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -151,14 +153,16 @@ def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime
     # drop topic/meeting entries whose slug or section is invalid.
     safe_actions: list[str] = []
     for a in (prop.get("actions", []) or []):
-        # Strip control chars, the two-character escape sequences (`\n`, `\r`,
-        # `\t`), remaining C0 controls (NUL .. \x08, \x0E .. \x1F, \x7F),
-        # Unicode line/paragraph separators (U+2028, U+2029), and NEL (U+0085).
-        # An LLM may emit any of these to smuggle a second action line into
-        # tasks.todo.txt — flatten them to space.
+        # Strip real control characters that could smuggle a second action line
+        # into tasks.todo.txt: C0 controls (NUL .. \x08, \x0E .. \x1F, \x7F),
+        # actual newline/tab/vertical-tab/form-feed, Unicode line/paragraph
+        # separators (U+2028, U+2029), and NEL (U+0085).
+        # We do NOT strip the two-character sequences \n, \r, \t (backslash +
+        # letter) — those are legitimate content (e.g. a Windows path C:\new)
+        # and real newline bytes are already caught by the control-char class.
         s = str(a)
         s = re.sub(
-            r"\\[nrt]|[\x00-\x08\x0e-\x1f\x7f\r\n\t\v\f\u2028\u2029\u0085]",
+            r"[\x00-\x08\x0e-\x1f\x7f\r\n\t\v\f\u2028\u2029\u0085]",
             " ", s,
         ).strip()
         if s:
@@ -201,15 +205,86 @@ def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime
     root = Path(notes_root)
     now = now or datetime.datetime.now()
     summary: dict = {"diary": False, "actions": 0, "topics": 0, "meetings": 0}
-    if str(prop.get("diary", "")).strip():
-        _append_diary(root, str(prop["diary"]), now)
-        summary["diary"] = True
-    # Silent cap (DoS hardening): if the caller passed more than MAX, take the
-    # first MAX. The Pydantic boundary in SweepConfirm will reject earlier with
-    # 422 for HTTP callers; this is the backstop for direct callers.
-    summary["actions"] = _append_actions(root, safe_actions[:MAX_ACTIONS])
-    summary["topics"] = _apply_topics(root, safe_topics[:MAX_TOPICS], now)
-    summary["meetings"] = _apply_meetings(root, safe_meetings[:MAX_MEETINGS], now)
+
+    # Bind the apply slices to locals so the snapshot and the apply call use
+    # the exact same lists — guards against a future refactor that re-caps
+    # inside a helper and silently desyncs the rollback target list.
+    actions_for_apply = safe_actions[:MAX_ACTIONS]
+    topics_for_apply = safe_topics[:MAX_TOPICS]
+    meetings_for_apply = safe_meetings[:MAX_MEETINGS]
+
+    # Snapshot files that will be modified so we can rollback on failure.
+    # Each entry: path → (existed_before, content_or_None).
+    # Memory bound: O(MAX_ACTIONS + MAX_TOPICS + MAX_MEETINGS) files, each
+    # bounded by the user's per-file size (one line per action in
+    # tasks.todo.txt, one small topic file per topic, one small meeting file
+    # per meeting). Today's caps (50/20/10) keep this well under 1 MB even
+    # for very large actions files.
+    snapshot: dict[Path, tuple[bool, str | None]] = {}
+    # Parent directories the apply may create — we rmdir them in rollback
+    # iff they didn't exist before and are empty after the restore. Keeps
+    # the rollback footprint identical to "no apply happened".
+    dirs_snapshot: dict[Path, bool] = {}
+    diary_text = str(prop.get("diary", "")).strip()
+    if diary_text:
+        p = root / "diary" / f"{now:%Y-%m-%d}.md"
+        snapshot[p] = (p.exists(), p.read_text(encoding="utf-8") if p.exists() else None)
+        dirs_snapshot[root / "diary"] = (root / "diary").exists()
+    if actions_for_apply:
+        p = root / "tasks.todo.txt"
+        snapshot[p] = (p.exists(), p.read_text(encoding="utf-8") if p.exists() else None)
+    for t in topics_for_apply:
+        p = root / "topics" / f"{t['slug']}.md"
+        if p not in snapshot:
+            snapshot[p] = (p.exists(), p.read_text(encoding="utf-8") if p.exists() else None)
+        dirs_snapshot[root / "topics"] = (root / "topics").exists()
+    for m in meetings_for_apply:
+        day = root / "meetings" / f"{now:%Y-%m-%d}"
+        p = day / f"{m['slug']}.md"
+        if p not in snapshot:
+            snapshot[p] = (p.exists(), p.read_text(encoding="utf-8") if p.exists() else None)
+        dirs_snapshot[day] = day.exists()
+
+    try:
+        if diary_text:
+            _append_diary(root, diary_text, now)
+            summary["diary"] = True
+        # Silent cap (DoS hardening): if the caller passed more than MAX, take the
+        # first MAX. The Pydantic boundary in SweepConfirm will reject earlier with
+        # 422 for HTTP callers; this is the backstop for direct callers.
+        summary["actions"] = _append_actions(root, actions_for_apply)
+        summary["topics"] = _apply_topics(root, topics_for_apply, now)
+        summary["meetings"] = _apply_meetings(root, meetings_for_apply, now)
+    except Exception:
+        # Rollback partial writes: restore snapshotted files to their original
+        # state, delete files that didn't exist before. This prevents partial
+        # writes (diary+actions when topics fail) from leaking into the next
+        # commit (see M2 in the audit). A crash between the write_text and
+        # the filesystem fsync is still possible — atomic_write_text below
+        # shrinks that window by routing the restore through a sibling .tmp
+        # and os.replace() so the file is never observed in a half-written
+        # state.
+        for path, (existed, content) in snapshot.items():
+            try:
+                if existed:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    _atomic.atomic_write_text(path, content or "", encoding="utf-8")
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                pass  # best-effort rollback
+        # Best-effort: drop any parent directories the apply created and the
+        # rollback left empty. rmdir() only succeeds when the directory is
+        # empty, so a directory that still has other files (e.g. a pre-existing
+        # topic untouched by this apply) is left in place.
+        for d, existed in dirs_snapshot.items():
+            if not existed:
+                try:
+                    d.rmdir()
+                except OSError:
+                    pass
+        raise
+
     return summary
 
 
@@ -321,12 +396,15 @@ def _insert_in_section(content: str, section: str, text: str) -> str:
 
 
 def _apply_topics(notes_root: Path, topics: list, now: datetime.datetime) -> int:
+    """Apply topics to disk. Trusts that *topics* has been pre-filtered by
+    ``safe_topics`` in ``apply_proposal`` — slug regex and section literal
+    checks already ran there; we only guard against empty values."""
     count = 0
     for t in topics:
         slug = str(t.get("slug", "")).strip()
         text = str(t.get("text", "")).strip()
         section = str(t.get("section", "## Current state")).strip()
-        if not slug or not text or not SLUG_RE.match(slug) or not is_valid_section(section):
+        if not slug or not text:
             continue
         tdir = notes_root / "topics"
         tdir.mkdir(parents=True, exist_ok=True)
@@ -344,10 +422,12 @@ def _apply_topics(notes_root: Path, topics: list, now: datetime.datetime) -> int
 
 
 def _apply_meetings(notes_root: Path, meetings: list, now: datetime.datetime) -> int:
+    """Apply meetings to disk. Trusts that *meetings* has been pre-filtered by
+    ``safe_meetings`` in ``apply_proposal`` — slug regex already ran there."""
     count = 0
     for m in meetings:
         slug = str(m.get("slug", "")).strip()
-        if not slug or not SLUG_RE.match(slug):
+        if not slug:
             continue
         day = notes_root / "meetings" / f"{now:%Y-%m-%d}"
         day.mkdir(parents=True, exist_ok=True)

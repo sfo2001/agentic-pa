@@ -1,9 +1,11 @@
 """Tests for the FastAPI browser-facing app."""
+import datetime
 import json
 import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import httpx
 import pytest
@@ -663,9 +665,25 @@ async def test_sweep_returns_proposal_and_does_not_write():
     data = r.json()
     assert data["ok"] is True
     assert data["proposal"]["diary"] == "Atlas morning."
-    assert data["capture"].endswith(".md")
+    capture_name = data["capture"]
+    assert capture_name.endswith(".md")
     # Propose must not write structure yet:
     assert not (Path(root) / "diary").exists()
+    # M1: /api/sweep owns the capture's lifetime — the happy path
+    # archives immediately. inbox/ is empty and archive/<cap> exists,
+    # so the "sweep → no /confirm" abandon path does not leave the
+    # capture in inbox/ and inflate the inbox badge. This test does
+    # NOT call /confirm, so it also pins the abandon contract by
+    # construction: a successful /api/sweep that's never confirmed
+    # must still have its capture in archive/.
+    inbox = Path(root) / "inbox"
+    archive = Path(root) / "archive"
+    assert inbox.exists() and not any(inbox.iterdir()), (
+        f"M1 happy-path cleanup failed: inbox still contains {list(inbox.iterdir())}"
+    )
+    assert (archive / capture_name).exists(), (
+        f"M1 happy-path cleanup failed: {capture_name} not in archive/"
+    )
 
 
 async def test_sweep_empty_when_caught_up():
@@ -693,9 +711,18 @@ async def test_sweep_confirm_applies_and_advances_watermark():
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/sweep/confirm", json=payload)
     assert r.status_code == 200 and r.json()["ok"] is True
-    assert (Path(root) / "diary" / "2026-06-04.md").exists()
+    # Diary was written — pin to the date the server's clock produces (not
+    # 2026-06-04 hard-coded, which was a latent time-bomb that only passed
+    # on that exact day). The exact `now`-driven date is exhaustively covered
+    # in ``test_apply_diary_appends_dated_section`` at the unit level.
+    today = datetime.date.today().isoformat()
+    assert (Path(root) / "diary" / f"{today}.md").exists()
     assert "(B) x +hw upd:2026-06-04" in (Path(root) / "tasks.todo.txt").read_text(encoding="utf-8")
-    assert not cap.exists() and (Path(root) / "archive" / cap.name).exists()  # archived
+    # /api/sweep/confirm does not move the capture — /api/sweep already
+    # archived it on its happy path (M1). This test bypasses /api/sweep
+    # (places the file directly), so the M1 archive step did not run for
+    # it: the capture sits in inbox/ and archive/ is empty.
+    assert cap.exists() and not (Path(root) / "archive" / cap.name).exists()  # /confirm did not archive
     assert sweep.read_watermark(root, "ses_fake") == "m9"  # advanced
 
 
@@ -749,7 +776,8 @@ async def test_sweep_returns_503_when_session_lost_during_propose_ingest():
         httpx.AsyncClient(transport=_FailTransport(), base_url="http://oc"),
         agent="workspace-assistant",
     )
-    app = create_app(NotesProxy(oc), notes_root=tempfile.mkdtemp())
+    root = tempfile.mkdtemp()
+    app = create_app(NotesProxy(oc), notes_root=root)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/sweep")
     assert r.status_code == 503
@@ -758,6 +786,11 @@ async def test_sweep_returns_503_when_session_lost_during_propose_ingest():
     assert j["error"] == "session lost"
     # The response MUST NOT leak the raw upstream error text.
     assert "connection refused" not in j["error"]
+    # M1 contract: when the failure happens *before* write_capture runs (the
+    # outer-try path), no capture is created — inbox/ must stay empty so the
+    # inbox badge does not inflate from this 503.
+    inbox = Path(root) / "inbox"
+    assert not inbox.exists() or not any(inbox.iterdir())
 
 
 async def test_sweep_returns_502_when_proposal_text_is_malformed():
@@ -781,6 +814,17 @@ async def test_sweep_returns_502_when_proposal_text_is_malformed():
     assert "forgot the schema" not in j["error"]
     # Fixed-text error only.
     assert j["error"].startswith("bad proposal:")
+    # M1 contract: write_capture ran (so a capture IS in inbox/), and the
+    # M1 finally block then moved it to archive/ on the 502 exit. The
+    # inbox/ must be empty and archive/<cap> must exist.
+    inbox = Path(root) / "inbox"
+    archive = Path(root) / "archive"
+    assert inbox.exists() and not any(inbox.iterdir()), (
+        f"M1 cleanup failed: inbox still contains {list(inbox.iterdir())}"
+    )
+    assert archive.exists() and any(archive.iterdir()), (
+        "M1 cleanup failed: archive/ is empty after 502 exit"
+    )
 
 
 # ── H-1: capture-name guards on /api/sweep/confirm are tested ────────────────
@@ -802,7 +846,9 @@ async def test_sweep_confirm_400_on_empty_capture():
         r = await c.post("/api/sweep/confirm", json=payload)
     assert r.status_code == 400
     assert r.json()["error"] == "invalid capture name"
-    # Capture file MUST still exist (the empty name didn't reach the archiver).
+    # Capture file MUST still exist in inbox/ — /confirm rejected the name
+    # before any I/O, and the M1 archive step (which /api/sweep owns) did
+    # not run because this test bypasses /api/sweep.
     assert cap.exists()
 
 
@@ -954,7 +1000,8 @@ async def test_sweep_returns_503_when_propose_ingest_fails_inner_path():
         httpx.AsyncClient(transport=transport, base_url="http://oc"),
         agent="workspace-assistant",
     )
-    app = create_app(NotesProxy(oc), notes_root=tempfile.mkdtemp())
+    root = tempfile.mkdtemp()
+    app = create_app(NotesProxy(oc), notes_root=root)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
         r = await c.post("/api/sweep")
     assert r.status_code == 503
@@ -963,3 +1010,84 @@ async def test_sweep_returns_503_when_propose_ingest_fails_inner_path():
     assert j["error"] == "session lost"
     # Must not leak the raw upstream error text.
     assert "propose failed" not in j["error"]
+    # M1 contract: write_capture ran in the inner-try, then SessionLost
+    # raised, then the M1 finally archived the orphan. inbox/ is empty,
+    # archive/<cap> exists.
+    inbox = Path(root) / "inbox"
+    archive = Path(root) / "archive"
+    assert inbox.exists() and not any(inbox.iterdir()), (
+        f"M1 cleanup failed: inbox still contains {list(inbox.iterdir())}"
+    )
+    assert archive.exists() and any(archive.iterdir()), (
+        "M1 cleanup failed: archive/ is empty after the 503 exit"
+    )
+
+
+# ── LOW: M1 OSError swallow + write_capture-fails race fix ─────────────────
+
+
+async def test_sweep_archive_capture_oserror_does_not_mask_502(monkeypatch):
+    """LOW: M1's ``except OSError: pass`` in the finally block must not
+    mask the original 502 response when ``archive_capture`` itself raises.
+    The capture stays in inbox/ (next sweep retries it) and the user sees
+    a clean 502, not a 500 or a crash.
+    """
+    from frontend import sweep as _sweep
+
+    def _raise_oserror(_root, _cap):
+        raise OSError("simulated permission denied on archive")
+
+    monkeypatch.setattr(_sweep, "archive_capture", _raise_oserror)
+
+    transcript = [
+        {"info": {"id": "m1", "role": "user"}, "parts": [{"type": "text", "text": "x"}]},
+        {"info": {"id": "m_final", "role": "assistant"},
+         "parts": [{"type": "text", "text": "sorry, I forgot the schema entirely"}]},
+    ]
+    root = tempfile.mkdtemp()
+    app = _sweep_app(transcript, notes_root=root)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/sweep")
+    # 502 is returned cleanly — the OSError did not leak into the response.
+    assert r.status_code == 502
+    assert r.json()["error"].startswith("bad proposal:")
+    # The capture is still in inbox/ (archive_capture failed). It will be
+    # picked up by the next sweep attempt — the documented retry path.
+    inbox = Path(root) / "inbox"
+    assert inbox.exists() and any(inbox.iterdir()), (
+        "archive_capture failed; capture should remain in inbox/ for retry"
+    )
+
+
+async def test_sweep_write_capture_failure_skips_archive(monkeypatch):
+    """MEDIUM: when ``sweep.write_capture`` itself raises (disk full,
+    permission denied, race with a concurrent delete), no capture is ever
+    created — the M1 finally must skip the archive (no orphan to clean up)
+    rather than crash on a NameError or try to move a non-existent file.
+
+    ASGITransport defaults to ``raise_app_exceptions=True``, so the OSError
+    surfaces in the test as the original exception — not a NameError on
+    the unbound ``capture`` reference. That is exactly the contract we
+    want to pin: an unexpected error in write_capture propagates cleanly,
+    and the finally block does the right thing (skip archive, no crash).
+    """
+    from frontend import sweep as _sweep
+
+    def _raise_oserror(_root, _text, *, stamp):
+        raise OSError("simulated write_capture failure (disk full)")
+
+    monkeypatch.setattr(_sweep, "write_capture", _raise_oserror)
+
+    transcript = [
+        {"info": {"id": "m1", "role": "user"}, "parts": [{"type": "text", "text": "x"}]},
+        {"info": {"id": "m_final", "role": "assistant"},
+         "parts": [{"type": "text", "text": _PROPOSAL_JSON}]},
+    ]
+    root = tempfile.mkdtemp()
+    app = _sweep_app(transcript, notes_root=root)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        with pytest.raises(OSError, match="simulated write_capture failure"):
+            await c.post("/api/sweep")
+    # No inbox/ or archive/ was created (capture never landed).
+    assert not (Path(root) / "inbox").exists()
+    assert not (Path(root) / "archive").exists()

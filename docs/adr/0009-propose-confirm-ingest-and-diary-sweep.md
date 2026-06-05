@@ -68,10 +68,16 @@ distinct from the forward-looking, regenerated **Brief**.
   silently drops bad items and caps lists, so direct callers (tests, scripts)
   don't have to pre-validate. This split keeps the HTTP boundary strict without
   making the applier fragile.
-- **Action sanitization:** action strings are stripped of `\r\n\t\v\f` AND the
-  two-character escape sequences (`\n`, `\r`, `\t`) before being written to
-  `tasks.todo.txt`. This stops an LLM from smuggling a second action line into
-  the file by writing `(A) line one\n(B) line two` — only the first line lands.
+- **Action sanitization:** action strings are stripped of *real* control
+  characters that could smuggle a second action line into `tasks.todo.txt`:
+  C0 controls (`\x00`..`\x08`, `\x0E`..`\x1F`, `\x7F`), real `\r\n\t\v\f`
+  bytes, and Unicode line/paragraph separators (U+2028, U+2029, U+0085). The
+  *two-character escape sequences* `\n`, `\r`, `\t` (backslash + letter) are
+  NOT stripped — they are legitimate content (e.g. a Windows path `C:\new`);
+  the file format splits on real newline bytes, not on the literal text
+  `\` + letter. This stops an LLM from smuggling a second action line into
+  the file by writing `(A) line one<LF>(B) line two` — only the first line
+  lands. See `frontend/proposal.py::apply_proposal` for the regex.
 - **Behavior change:** existing drop-file Ingest no longer auto-files — users who
   relied on that now confirm first. Recorded here so a future reader does not "fix"
   it back to auto-file.
