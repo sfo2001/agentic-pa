@@ -93,7 +93,26 @@ def test_mcp_pythonpath_baked_into_both_servers_when_given():
 
 
 def test_mcp_pythonpath_absent_by_default():
-    # venv mode: nothing baked; present keeps no environment block (output parity).
+    # venv mode: PYTHONPATH absent, but NOTES_ROOT always set on both servers.
     cfg = _cfg()
     assert "PYTHONPATH" not in cfg["mcp"]["notes"]["environment"]
-    assert "environment" not in cfg["mcp"]["present"]
+    assert cfg["mcp"]["notes"]["environment"]["NOTES_ROOT"] == "/n"
+    assert cfg["mcp"]["present"]["environment"]["NOTES_ROOT"] == "/n"
+    assert "PYTHONPATH" not in cfg["mcp"]["present"]["environment"]
+
+
+# ── Phase 5: restrict_write flips write/edit to deny ───────────────────────
+
+
+def test_restrict_write_denies_edit_and_write():
+    cfg = _cfg(restrict_write=True)
+    assert cfg["permission"]["write"] == "deny"
+    assert cfg["permission"]["edit"] == "deny"
+    assert cfg["agent"]["workspace-assistant"]["permission"]["write"] == "deny"
+    assert cfg["permission"]["present_*"] == "allow"  # tools still allowed
+
+
+def test_default_allows_write():
+    cfg = _cfg()
+    assert cfg["permission"]["write"] == "allow"
+    assert cfg["permission"]["edit"] == "allow"

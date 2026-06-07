@@ -1,9 +1,9 @@
 [project]
 name = "presenter-service"
 dynamic = ["version"]
-description = "Thin MCP server: the present(path) UI signal for the Presentation pane"
+description = "MCP server: the present(path) UI signal and propose(proposal) ingest tool"
 requires-python = ">=3.10"
-dependencies = ["mcp>=1.2.0,<2"]
+dependencies = ["mcp>=1.2.0,<2", "frontend"]
 
 [project.scripts]
 present-server = "presenter.server:main"

@@ -90,5 +90,8 @@ distinct from the forward-looking, regenerated **Brief**.
 
 - Builds on ADR-0003 (frontend owns git), ADR-0005 (sandbox), ADR-0007 (Ingest as a
   conventions layer). Transcript surface: `docs/decisions/D-opencode-http.md`.
+- **Propose MCP tool:** the `present_propose` tool is served by the **present MCP
+  server** (ADR-0006), alongside `present_present`. The server key `present`
+  namespaces both tools as `present_<name>` for the agent.
 - Deferred (trigger-gated): idle auto-trigger; Sweep as the *sole* structurer;
   auto-file toggle. See ROADMAP and the design spec.

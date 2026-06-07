@@ -150,6 +150,13 @@ ports with `OPENCODE_PORT` / `WEB_PORT`.
 
 - **Drop raw notes** into `~/cos-notes/workspace/inbox/` (any `.md`/`.txt`), then
   click **Process inbox** (or type "Process the inbox.").
+- **Ingest is propose-confirm by construction.** The agent never writes
+  `tasks.todo.txt` / `topics/*.md` / `meetings/*` directly — it calls the
+  `present_propose` MCP tool to stage a structured proposal; the frontend
+  shows it to you for confirmation and applies the user-confirmed bytes
+  deterministically (see ADR-0009). The shared validation schema
+  (slug regex, section literal set, list/field caps) lives in
+  `frontend/proposal.py`.
 - **Daily brief** / **Weekly review** buttons run the deterministic agenda loop.
 - **Upload** a PPTX/DOCX/PDF — it lands in `workspace/documents/` with a `.md`
   sibling, linkable from a topic.

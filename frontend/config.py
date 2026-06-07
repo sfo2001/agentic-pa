@@ -40,6 +40,7 @@ def build_opencode_config(
     prompt_path: str,
     api_key: str | None = None,
     mcp_pythonpath: str | None = None,
+    restrict_write: bool = False,
 ) -> dict:
     """Build and return the opencode.json config dict.
 
@@ -80,6 +81,10 @@ def build_opencode_config(
             ``PYTHONPATH`` being inherited down the launch chain. ``None`` (venv
             mode) leaves the config untouched: the venv interpreter already has
             the packages, and ``present`` keeps no ``environment`` block.
+        restrict_write: When True, flip ``write`` and ``edit`` permissions to
+            ``deny`` so the agent must route every mutation through the
+            ``present_propose`` / ``present_task`` MCP tools (frontend is the
+            sole writer). Default False.
     """
     permissions = {
         "bash": "deny",
@@ -96,6 +101,9 @@ def build_opencode_config(
         "notes_*": "allow",
         "present_*": "allow",
     }
+    if restrict_write:
+        permissions["write"] = "deny"
+        permissions["edit"] = "deny"
     # Omit apiKey when a real key is provided so OpenCode falls through to the
     # auth.json credential; keep the "local" placeholder only for keyless servers.
     options = {"baseURL": model_endpoint}
@@ -105,7 +113,7 @@ def build_opencode_config(
     # OpenCode-spawned `python -m <module>` children are self-sufficient; venv
     # mode leaves both untouched (present keeps no environment block).
     notes_env = {"NOTES_ROOT": notes_root}
-    present_env: dict = {}
+    present_env = {"NOTES_ROOT": notes_root}
     if mcp_pythonpath:
         notes_env["PYTHONPATH"] = mcp_pythonpath
         present_env["PYTHONPATH"] = mcp_pythonpath

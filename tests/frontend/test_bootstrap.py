@@ -232,3 +232,21 @@ def test_bootstrap_refreshes_prompt_on_reinstall(tmp_path):
 
     bootstrap.init_install(root, **kw)
     assert prompt.read_text(encoding="utf-8") == canonical  # refreshed, not stale
+
+
+# ── Phase 5: init_install restrict_write bakes deny into opencode.json ─────
+
+
+def test_init_install_restrict_write_bakes_deny(tmp_path):
+    root = tmp_path / "cos-notes"
+    bootstrap.init_install(
+        root,
+        model_endpoint="http://example:11434/v1",
+        model_id="test-model",
+        python_executable="/opt/.venv/bin/python",
+        restrict_write=True,
+    )
+    cfg = json.loads((root / "opencode.json").read_text(encoding="utf-8"))
+    assert cfg["permission"]["write"] == "deny"
+    assert cfg["permission"]["edit"] == "deny"
+    assert cfg["agent"]["workspace-assistant"]["permission"]["write"] == "deny"

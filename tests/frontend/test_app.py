@@ -438,6 +438,112 @@ async def test_upload_empty_filename_returns_400(tmp_path):
         assert "error" in body
 
 
+# ── Proposal endpoints: GET /api/proposal and POST /api/proposal/confirm ──────
+
+
+async def test_proposal_get_returns_404_when_no_pending(tmp_path):
+    app = _app(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/proposal")
+    assert r.status_code == 404
+    assert r.json()["error"] == "no pending proposal"
+
+
+async def test_proposal_get_returns_proposal_when_pending(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    prop = {"diary": "Test", "actions": [], "topics": [], "meetings": []}
+    (inbox / "_proposal.json").write_text(json.dumps(prop), encoding="utf-8")
+    app = _app(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/proposal")
+    assert r.status_code == 200
+    assert r.json()["proposal"] == prop
+
+
+async def test_proposal_confirm_returns_404_when_no_pending(tmp_path):
+    app = _app(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/proposal/confirm")
+    assert r.status_code == 404
+    assert r.json()["error"] == "no pending proposal"
+
+
+async def test_proposal_confirm_applies_and_cleans_up(tmp_path):
+    from frontend import versioning
+
+    versioning.ensure_repo(tmp_path)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    prop = {
+        "diary": "Confirmed proposal.",
+        "actions": ["(B) test action +t1 upd:2026-06-05"],
+        "topics": [{"slug": "t1", "section": "## Current state", "text": "test topic"}],
+        "meetings": [],
+    }
+    (inbox / "_proposal.json").write_text(json.dumps(prop), encoding="utf-8")
+    app = _app(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/proposal/confirm")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["committed"] is not None
+    # Proposal file was cleaned up
+    assert not (inbox / "_proposal.json").exists()
+    # Diary was written
+    assert (tmp_path / "diary").exists()
+
+
+async def test_proposal_confirm_400_on_corrupted_json(tmp_path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "_proposal.json").write_text("not valid json{{{", encoding="utf-8")
+    app = _app(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/proposal/confirm")
+    assert r.status_code == 400
+    assert "corrupted" in r.json()["error"]
+
+
+async def test_proposal_get_500_on_corrupted_json(tmp_path):
+    """GET /api/proposal returns 500 when the proposal file has unparseable JSON."""
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "_proposal.json").write_text("{{{ not json", encoding="utf-8")
+    app = _app(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/proposal")
+    assert r.status_code == 500
+    assert "corrupted" in r.json()["error"]
+
+
+async def test_proposal_confirm_rollback_cleans_up_on_apply_failure(tmp_path, monkeypatch):
+    """When proposal.apply_proposal raises, the _proposal.json is still cleaned up."""
+    import frontend.app as app_mod
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("apply failed")
+
+    monkeypatch.setattr(app_mod.proposal, "apply_proposal", _raise)
+    from frontend import versioning
+    versioning.ensure_repo(tmp_path)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    prop = {
+        "diary": "Will fail.",
+        "actions": [],
+        "topics": [],
+        "meetings": [],
+    }
+    (inbox / "_proposal.json").write_text(json.dumps(prop), encoding="utf-8")
+    app = _app(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        with pytest.raises(RuntimeError, match="apply failed"):
+            await c.post("/api/proposal/confirm")
+    assert not (inbox / "_proposal.json").exists()
+
+
 # ── Changelog → commit subject ──────────────────────────────────────────────
 
 def test_changelog_subject_prefers_changelog_line():
@@ -772,11 +878,12 @@ async def test_sweep_confirm_empty_proposal_advances_only_watermark():
 # ── T12: agent prompt locks PROPOSE-mode contract ────────────────────────────
 
 
-def test_agent_prompt_specifies_propose_mode_and_schema():
+def test_agent_prompt_specifies_propose_tool_and_schema():
     from pathlib import Path as _P
 
     prompt = (_P(__file__).resolve().parents[2] / "frontend" / "assets" / "notes-agent.md").read_text(encoding="utf-8")
-    assert "PROPOSE mode" in prompt
+    assert "present_propose" in prompt
+    assert "never write directly" in prompt
     # The structured contract the frontend parser relies on:
     for key in ('"diary"', '"actions"', '"topics"', '"meetings"'):
         assert key in prompt
@@ -1116,3 +1223,44 @@ async def test_sweep_write_capture_failure_skips_archive(monkeypatch):
     # No inbox/ or archive/ was created (capture never landed).
     assert not (Path(root) / "inbox").exists()
     assert not (Path(root) / "archive").exists()
+
+
+# ── Phase 4: confirm applies task_ops ──────────────────────────────────────
+
+
+async def test_confirm_applies_task_ops(tmp_path):
+    import json as _json
+    versioning.ensure_repo(tmp_path)
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(B) call vendor +hw t:2026-06-12 upd:2026-06-06 id:bbb222\n", encoding="utf-8")
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / "inbox" / "_proposal.json").write_text(_json.dumps({
+        "diary": "", "actions": [], "topics": [], "meetings": [],
+        "task_ops": [{"id": "bbb222", "op": "complete", "value": None}],
+    }), encoding="utf-8")
+    oc = OpenCodeClient(httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=make_fake_opencode([])), base_url="http://oc"),
+        agent="workspace-assistant")
+    app = create_app(NotesProxy(oc), notes_root=tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/proposal/confirm")
+    assert r.status_code == 200 and r.json()["ok"] is True
+    line = (tmp_path / "tasks.todo.txt").read_text().splitlines()[0]
+    assert line.startswith("x ")  # mutation applied
+    assert not (tmp_path / "inbox" / "_proposal.json").exists()  # staging cleared
+
+
+# ── Phase 5: lifespan backfills ids on startup ──────────────────────────────
+
+
+async def test_lifespan_backfills_ids(tmp_path):
+    from asgi_lifespan import LifespanManager
+    (tmp_path / "tasks.todo.txt").write_text("(A) x +t upd:2026-06-06\n", encoding="utf-8")
+    oc = OpenCodeClient(httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=make_fake_opencode([])), base_url="http://oc"),
+        agent="workspace-assistant")
+    app = create_app(NotesProxy(oc), notes_root=tmp_path)
+    async with LifespanManager(app):
+        pass  # entering the manager runs startup
+    import re
+    assert re.search(r" id:[a-z0-9]{6}$", (tmp_path / "tasks.todo.txt").read_text().strip())

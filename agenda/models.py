@@ -21,6 +21,7 @@ class Action:
     due: date | None = None
     tickler: date | None = None
     updated: date | None = None
+    id: str | None = None
 
     @property
     def quadrant(self) -> str | None:
@@ -38,4 +39,5 @@ class Action:
             "tickler": self.tickler.isoformat() if self.tickler else None,
             "updated": self.updated.isoformat() if self.updated else None,
             "done": self.done,
+            "id": self.id,
         }

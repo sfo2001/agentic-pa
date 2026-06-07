@@ -5,6 +5,8 @@ __pycache__/
 *.pyc
 .coverage
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 build/
 # Algorithm/session work-tracking artifacts — contain machine-local info; never commit
 MEMORY/
@@ -19,7 +21,13 @@ oc-home/
 notes.git/
 workspace/
 .sweep-state.json
+# Runtime proposal staging file — written to notes_root/inbox/ by the propose MCP tool.
+# Also created in the project root by tests using tmp_path-based notes roots.
+inbox/
 # Generated OpenCode config / credentials — may carry machine-local values or a
 # real API key; never commit, regardless of where they land in the tree.
 **/opencode.json
 **/auth.json
+# Local audit outputs — durable offline review but not project documentation.
+findings.md
+pr-audit-findings.md

@@ -1,4 +1,4 @@
-# The presentation pane shows agent-pushed Artifacts via a dedicated `present` MCP server, rendered server-side as sanitized HTML
+# The presentation pane shows agent-pushed Artifacts via a dedicated `present` MCP server (which also hosts the `propose` tool), rendered server-side as sanitized HTML
 
 The web UI gains a second pane (right) — the **Presentation pane** — that renders an
 **Artifact** (a Ground-Truth file or generated draft: a Meeting/MoM, Brief, Topic,
@@ -26,6 +26,10 @@ otherwise guards tightly (ADR-0005, the sandbox).
    timing as tool chips). *Ruled out:* a `PRESENT:` text-marker convention (simpler,
    but not a structured/auditable tool-call) and inferring from file writes (noisy).
 
+   The same MCP server also exposes a **`propose(proposal)` tool** (see ADR-0009)
+   for the propose-confirm ingest flow. The agent calls it as `present_propose`
+   (OpenCode namespaces tools as `<server-key>_<toolname>`).
+
 2. **Content is served + rendered server-side.** A read-only `GET /api/file`
    resolves the path within `workspace/` with the same resolve-and-reject-traversal
    guard as `upload.py`, renders markdown→HTML **on the server**, and runs it through
@@ -44,8 +48,9 @@ otherwise guards tightly (ADR-0005, the sandbox).
   the pane shows server-rendered, sanitized HTML. XSS safety now hinges on the
   server-side sanitizer being correct and kept current — a single trusted choke
   point, by design. The conversation pane stays `textContent`-only.
-- A **new MCP server** + a **new `present` SSE event** + relay tool-input extraction
-  + a new read endpoint are added; the Agenda service stays read-only/deterministic.
+- A **new MCP server** (dual-tool: `present` + `propose`) + a **new `present` SSE event**
+  + relay tool-input extraction + a new read endpoint are added; the Agenda service
+  stays read-only/deterministic.
 - New Python deps: a markdown renderer + an HTML sanitizer (`nh3`).
 - **Could age badly:** if a markitdown-converted upload (or a malicious notes file)
   carries hostile markup, correctness rests entirely on the sanitizer; raw HTML in

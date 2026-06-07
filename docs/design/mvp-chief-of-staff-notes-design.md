@@ -302,6 +302,20 @@ sandbox `workspace/` tree directly.
    *Cold start: if a markdown backlog is dropped in `inbox/`, a one-time seed pass
    proposes a topic taxonomy for approval; otherwise the Ground Truth grows
    forward from day one.*
+
+   **Ingest is propose-confirm by construction.** The agent never writes
+   `tasks.todo.txt`, `topics/*.md`, or `meetings/*` directly. Instead it calls
+   the **`present_propose(proposal)` MCP tool** (served by the present MCP
+   server alongside `present`; see ADR-0006/0009), which validates the proposal
+   against the shared schema (slug regex, section literal set, list caps, and
+   per-field length caps — all in `frontend/proposal.py` and imported by the
+   presenter for cross-package consistency), and stages it to
+   `inbox/_proposal.json`. The frontend reads the staged proposal, shows it to
+   the user for confirmation (the UI handshake that surfaces the proposal
+   reuses the existing sweep-panel), and on confirm calls
+   `proposal.apply_proposal` deterministically — the user-confirmed bytes are
+   the bytes that land. ADR-0009 is the authoritative ingest flow spec;
+   ADR-0006 documents the dual-tool present server.
 2. **Capture** — a quick note typed in chat runs the same pipeline, lighter
    (may produce a single action or a mini-meeting record).
 3. **Daily brief** — agent calls `agenda_today`, writes `briefs/DATE-daily.md`,

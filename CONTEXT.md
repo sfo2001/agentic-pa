@@ -162,7 +162,14 @@ _Avoid_: "metadata" (too broad).
   updates (a **Meeting** only if a real gathering was recounted).
 - **Ingest** (any source) is **propose-confirm**: the agent emits a proposal, the
   frontend applies it deterministically. The frontend is therefore the writer of
-  confirmed Ground-Truth content as well as the **Index**.
+  confirmed Ground-Truth content as well as the **Index**. The agent calls
+  the **`present_propose(proposal)` MCP tool** (served by the present MCP
+  server — see ADR-0006/0009) which stages the proposal to
+  `inbox/_proposal.json`; the frontend then shows it to the user for
+  confirmation and applies it on confirm. The shared schema (slug regex,
+  section literal set, list caps, per-field length caps) lives in
+  `frontend/proposal.py` and is imported by the presenter for cross-package
+  consistency.
 - A **Diary** accretes across **Sweeps** within a day; a **Brief** is regenerated
   from the **Ground Truth service** — opposite lifecycles.
 

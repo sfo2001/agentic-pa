@@ -9,6 +9,7 @@ from __future__ import annotations
 import datetime
 import json
 import re
+import secrets
 from pathlib import Path
 
 import yaml
@@ -24,6 +25,20 @@ SLUG_PATTERN = SLUG_RE.pattern
 MAX_ACTIONS = 50
 MAX_TOPICS = 20
 MAX_MEETINGS = 10
+MAX_TASK_OPS = 50
+
+# Per-field length caps for the propose entry. Mirrors the Pydantic body at the
+# HTTP boundary (see frontend/app.py::_SweepTopicEntry / _SweepMeetingEntry) so
+# the same limits are enforced at the MCP entry. The Pydantic body imports these
+# constants directly — keep the two sides in lock-step.
+MAX_DIARY_LEN = 8000
+MAX_ACTION_TEXT_LEN = 200
+MAX_TOPIC_TEXT_LEN = 8000
+MAX_TOPIC_SECTION_LEN = 120
+MAX_MEETING_TITLE_LEN = 200
+MAX_MEETING_FIELD_LEN = 8000  # summary / decisions / actions / raw
+MAX_MEETING_TOPICS_PER = 20
+MAX_PROPOSAL_BYTES = 1 * 1024 * 1024  # 1 MiB total JSON size cap
 
 # Known topic/meeting sections (literal set used by the Pydantic model).
 # `## Open actions (as of YYYY-MM-DD)` is the regenerated snapshot — also
@@ -36,6 +51,65 @@ _VALID_SECTION_HEADERS = (
     "## Key decisions", "## Meetings", "## Documents",
 )
 VALID_SECTIONS: tuple[str, ...] = _VALID_SECTION_HEADERS
+
+
+# Date tokens in a todo.txt action line: `due:YYYY-MM-DD` (deadline) and
+# `t:YYYY-MM-DD` (tickler/resurface). `(?<!\S)` anchors each to a token start
+# (whitespace or line start) so `t:` is not matched inside `upd:` etc.
+_DUE_RE = re.compile(r"(?<!\S)due:(\S+)")
+_TICKLER_RE = re.compile(r"(?<!\S)t:(\S+)")
+
+# Stable per-action id tag: `id:xxxxxx` (6 base36 chars). Token-anchored so
+# `id:` inside other words isn't matched. Used by mutate-via-id paths.
+# The bare id value pattern (without the `id:` prefix) — shared by Pydantic
+# and agenda/parser.py so all consumers stay in lock-step.
+ID_LENGTH = 6
+ID_BARE_PATTERN = rf"^[a-z0-9]{{{ID_LENGTH}}}$"
+ID_BARE_RE = re.compile(ID_BARE_PATTERN)
+_ID_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
+_ID_TOKEN_RE = re.compile(rf"(?<!\S)id:[a-z0-9]{{{ID_LENGTH}}}(?!\S)")
+
+
+def gen_id() -> str:
+    """A 6-char base36 action id (≈2.2e9 space; collisions handled per-file)."""
+    return "".join(secrets.choice(_ID_ALPHABET) for _ in range(ID_LENGTH))
+
+
+def validate_action_dates(actions: list[str]) -> list[str]:
+    """Return human-readable errors for date problems in todo.txt action lines.
+
+    Two **time-independent** checks (so the propose gate stays deterministic and
+    test-safe — a wall-clock-relative check would make hardcoded-date tests flaky):
+
+      * malformed ``due:`` / ``t:`` dates (not a real ``YYYY-MM-DD``), and
+      * a tickler later than the deadline (``t:`` > ``due:``) — i.e. a reminder
+        that fires *after* the thing is due, the exact bug this guards against.
+
+    It deliberately does **not** flag past dates (time-relative) and cannot know
+    that a deadline-worded action *should* carry a ``due:`` — that stays the
+    agent's job (see notes-agent.md ingest rule 3). Empty list ⇒ all good.
+    """
+    errors: list[str] = []
+    for a in actions:
+        due = tick = None
+        m = _DUE_RE.search(a)
+        if m:
+            try:
+                due = datetime.date.fromisoformat(m.group(1))
+            except ValueError:
+                errors.append(f"invalid due: date {m.group(1)!r} in action: {a!r}")
+        m = _TICKLER_RE.search(a)
+        if m:
+            try:
+                tick = datetime.date.fromisoformat(m.group(1))
+            except ValueError:
+                errors.append(f"invalid t: date {m.group(1)!r} in action: {a!r}")
+        if due and tick and tick > due:
+            errors.append(
+                f"tickler t:{tick.isoformat()} is after due:{due.isoformat()} — a "
+                f"reminder after the deadline is almost always wrong, in action: {a!r}"
+            )
+    return errors
 
 
 class ProposalError(ValueError):
@@ -124,12 +198,12 @@ def _append_diary(notes_root: Path, text: str, now: datetime.datetime) -> None:
     diary.mkdir(parents=True, exist_ok=True)
     path = diary / f"{now:%Y-%m-%d}.md"
     if not path.exists():
-        path.write_text(f"# Diary {now:%Y-%m-%d}\n", encoding="utf-8")
+        _atomic.atomic_write_text(path, f"# Diary {now:%Y-%m-%d}\n", encoding="utf-8")
     with path.open("a", encoding="utf-8") as fh:
         fh.write(f"\n## {now:%H:%M}\n\n{text.strip()}\n")
 
 
-def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime | None = None) -> dict:
+def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime | None = None, task_ops: list[dict] | None = None) -> dict:
     """Apply a confirmed proposal deterministically. Returns a summary of writes.
 
     Validation policy: per-item structural checks (slug regex, section literal)
@@ -141,6 +215,11 @@ def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime
     validation gate — it uses the same regex and section-literal checks and
     rejects malformed input with a 422. This function is the lenient applier
     that direct callers (tests, scripts) can use without pre-validating.
+
+    *task_ops* are applied under the same snapshot/rollback as the proposal
+    fields, so a failure mid-apply (e.g. a disk-full on a topic write after
+    task_ops have already mutated tasks.todo.txt) restores all files to
+    pre-apply state.
     """
     if not isinstance(prop, dict):
         raise ProposalValidationError("proposal is not a dict")
@@ -153,16 +232,17 @@ def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime
     # drop topic/meeting entries whose slug or section is invalid.
     safe_actions: list[str] = []
     for a in (prop.get("actions", []) or []):
-        # Strip real control characters that could smuggle a second action line
+        # Strip control characters that could smuggle a second action line
         # into tasks.todo.txt: C0 controls (NUL .. \x08, \x0E .. \x1F, \x7F),
-        # actual newline/tab/vertical-tab/form-feed, Unicode line/paragraph
-        # separators (U+2028, U+2029), and NEL (U+0085).
+        # C1 controls (\x80 .. \x9F — NEXT LINE, START OF STRING, etc.), actual
+        # newline/tab/vertical-tab/form-feed, Unicode line/paragraph separators
+        # (U+2028, U+2029). NEL (U+0085) is already covered by the C1 range.
         # We do NOT strip the two-character sequences \n, \r, \t (backslash +
         # letter) — those are legitimate content (e.g. a Windows path C:\new)
         # and real newline bytes are already caught by the control-char class.
         s = str(a)
         s = re.sub(
-            r"[\x00-\x08\x0e-\x1f\x7f\r\n\t\v\f\u2028\u2029\u0085]",
+            r"[\x00-\x08\x0e-\x1f\x7f\x80-\x9f\r\n\t\v\f\u2028\u2029]",
             " ", s,
         ).strip()
         if s:
@@ -204,7 +284,7 @@ def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime
 
     root = Path(notes_root)
     now = now or datetime.datetime.now()
-    summary: dict = {"diary": False, "actions": 0, "topics": 0, "meetings": 0}
+    summary: dict = {"diary": False, "actions": 0, "topics": 0, "meetings": 0, "task_ops": None}
 
     # Bind the apply slices to locals so the snapshot and the apply call use
     # the exact same lists — guards against a future refactor that re-caps
@@ -244,6 +324,13 @@ def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime
         if p not in snapshot:
             snapshot[p] = (p.exists(), p.read_text(encoding="utf-8") if p.exists() else None)
         dirs_snapshot[day] = day.exists()
+    # Snapshot tasks.todo.txt for task_ops too — the actions block above may
+    # have already captured it; skip if so.
+    safe_task_ops = list(task_ops or [])
+    if safe_task_ops:
+        p = root / "tasks.todo.txt"
+        if p not in snapshot:
+            snapshot[p] = (p.exists(), p.read_text(encoding="utf-8") if p.exists() else None)
 
     try:
         if diary_text:
@@ -255,6 +342,10 @@ def apply_proposal(notes_root: Path | str, prop: dict, *, now: datetime.datetime
         summary["actions"] = _append_actions(root, actions_for_apply)
         summary["topics"] = _apply_topics(root, topics_for_apply, now)
         summary["meetings"] = _apply_meetings(root, meetings_for_apply, now)
+        if safe_task_ops:
+            task_result = apply_task_ops(root, safe_task_ops,
+                                         now=now.date() if now else None)
+            summary["task_ops"] = task_result
     except Exception:
         # Rollback partial writes: restore snapshotted files to their original
         # state, delete files that didn't exist before. This prevents partial
@@ -293,10 +384,115 @@ def _append_actions(notes_root: Path, actions: list[str]) -> int:
         return 0
     path = notes_root / "tasks.todo.txt"
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    used = set(_ID_TOKEN_RE.findall(existing))
+    stamped: list[str] = []
+    for a in actions:
+        if _ID_TOKEN_RE.search(a):
+            stamped.append(a)
+            continue
+        new = f"id:{gen_id()}"
+        while f"id:{new[3:]}" in used or new in used:
+            new = f"id:{gen_id()}"
+        used.add(new)
+        stamped.append(f"{a.rstrip()} {new}")
     if existing and not existing.endswith("\n"):
         existing += "\n"
-    path.write_text(existing + "\n".join(actions) + "\n", encoding="utf-8")
-    return len(actions)
+    _atomic.atomic_write_text(path, existing + "\n".join(stamped) + "\n", encoding="utf-8")
+    return len(stamped)
+
+
+def backfill_ids(notes_root: Path | str) -> int:
+    """Stamp ``id:`` on any task line lacking one. Idempotent; preserves blanks,
+    comments, and existing ids. Returns the count stamped."""
+    path = Path(notes_root) / "tasks.todo.txt"
+    if not path.exists():
+        return 0
+    text = path.read_text(encoding="utf-8")
+    used = set(_ID_TOKEN_RE.findall(text))
+    out: list[str] = []
+    stamped = 0
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or _ID_TOKEN_RE.search(line):
+            out.append(line)
+            continue
+        new = f"id:{gen_id()}"
+        while new in used:
+            new = f"id:{gen_id()}"
+        used.add(new)
+        out.append(f"{line.rstrip()} {new}")
+        stamped += 1
+    if stamped:
+        _atomic.atomic_write_text(path, "\n".join(out) + "\n", encoding="utf-8")
+    return stamped
+
+
+_PRIORITY_TOK_RE = re.compile(r"^\([A-D]\)$")
+
+
+def _rewrite_line(line: str, op: str, value: str | None, today: str) -> str:
+    """Apply one op to a single todo.txt line, bumping upd: to *today*."""
+    tokens = line.split()
+    if tokens and tokens[0] == "x":
+        done, rest = True, tokens[1:]
+    else:
+        done, rest = False, tokens
+    # locate priority (first token if it matches)
+    prio_idx = 0 if rest and _PRIORITY_TOK_RE.match(rest[0]) else None
+    if op == "reprioritize" and value:
+        new_prio = f"({value})"
+        if prio_idx is not None:
+            rest[prio_idx] = new_prio
+        else:
+            rest.insert(0, new_prio)
+    elif op == "retickle" and value:
+        rest = [t for t in rest if not t.startswith("t:")]
+        # keep ticklers next to other date tags — append; ordering is cosmetic
+        rest.append(f"t:{value}")
+    elif op == "complete":
+        done = True
+    # bump upd:
+    rest = [t for t in rest if not t.startswith("upd:")]
+    rest.append(f"upd:{today}")
+    prefix = "x " if done else ""
+    return prefix + " ".join(rest)
+
+
+def apply_task_ops(notes_root: Path | str, ops: list[dict], *, now: datetime.date | None = None) -> dict:
+    """Apply mutation ops to existing actions, matched by ``id:``. Returns
+    ``{"applied": n, "errors": [...]}``. Atomic write; bumps ``upd:`` to today.
+    retickle/reprioritize values are validated; bad values become errors."""
+    path = Path(notes_root) / "tasks.todo.txt"
+    today = (now or datetime.date.today()).isoformat()
+    errors: list[str] = []
+    if not path.exists():
+        return {"applied": 0, "errors": [f"no tasks.todo.txt; ops: {len(ops)}"]}
+    lines = path.read_text(encoding="utf-8").splitlines()
+    by_id = {}
+    for i, line in enumerate(lines):
+        m = _ID_TOKEN_RE.search(line)
+        if m:
+            by_id[m.group(0)[3:]] = i
+    applied = 0
+    for op in ops:
+        oid, name, value = str(op.get("id", "")), str(op.get("op", "")), op.get("value")
+        if oid not in by_id:
+            errors.append(f"no action with id {oid!r}")
+            continue
+        if name not in ("complete", "reprioritize", "retickle"):
+            errors.append(f"unknown op {name!r} for id {oid}")
+            continue
+        if name == "reprioritize" and value not in ("A", "B", "C", "D"):
+            errors.append(f"reprioritize id {oid}: value must be A-D, got {value!r}")
+            continue
+        if name == "retickle" and validate_action_dates([f"t:{value}"]):
+            errors.append(f"retickle id {oid}: invalid date {value!r}")
+            continue
+        lines[by_id[oid]] = _rewrite_line(lines[by_id[oid]], name, value, today)
+        applied += 1
+    if applied:
+        _atomic.atomic_write_text(path, "\n".join(lines) + "\n", encoding="utf-8")
+    return {"applied": applied, "errors": errors}
 
 
 # Open-actions section marker, regenerated by _regenerate_open_actions_block.
@@ -416,7 +612,7 @@ def _apply_topics(notes_root: Path, topics: list, now: datetime.datetime) -> int
         # when you edit that topic file").
         inserted = _insert_in_section(content, section, text)
         content = _regenerate_open_actions_block(notes_root, inserted, now)
-        path.write_text(content, encoding="utf-8")
+        _atomic.atomic_write_text(path, content, encoding="utf-8")
         count += 1
     return count
 
@@ -432,22 +628,26 @@ def _apply_meetings(notes_root: Path, meetings: list, now: datetime.datetime) ->
         day = notes_root / "meetings" / f"{now:%Y-%m-%d}"
         day.mkdir(parents=True, exist_ok=True)
         m_topics = list(m.get("topics") or [])
-        # Use yaml.safe_dump to render the topics list as a valid YAML block —
-        # avoids the bug where unquoted bare tokens like `topics: [a, b, c]`
-        # parse as three unrelated keys. Dumping the list directly (not a
-        # single-key dict) gives `[a, b, c]` — the expected flow form.
-        list_yaml = yaml.safe_dump(m_topics, default_flow_style=True).rstrip()
+        # Build frontmatter via yaml.safe_dump (same pattern as _new_topic) so
+        # NUL bytes, YAML-significant characters, and break-out sequences like
+        # ``\n---\n`` in the title are properly YAML-quoted and cannot escape
+        # the frontmatter block.
+        fm = yaml.safe_dump(
+            {
+                "date": now.date(),
+                "title": m.get("title", slug),
+                "topics": m_topics,
+            },
+            default_flow_style=False,
+            sort_keys=False,
+        )
         body = (
-            f"---\n"
-            f"date: {now:%Y-%m-%d}\n"
-            f"title: {m.get('title', slug)}\n"
-            f"topics: {list_yaml}\n"
-            f"---\n"
+            f"---\n{fm}---\n"
             f"## Summary\n{m.get('summary', '')}\n\n"
             f"## Decisions\n{m.get('decisions', '')}\n\n"
             f"## Actions\n{m.get('actions', '')}\n\n"
             f"## Raw notes\n{m.get('raw', '')}\n"
         )
-        (day / f"{slug}.md").write_text(body, encoding="utf-8")
+        _atomic.atomic_write_text(day / f"{slug}.md", body, encoding="utf-8")
         count += 1
     return count

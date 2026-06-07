@@ -155,6 +155,90 @@ def _port_parser(v: str) -> int:
     return p
 
 
+def _restrict_write_env() -> bool | None:
+    """Parse RESTRICT_WRITE: 1/true/yes → True, 0/false/no → False, unset/'' → None."""
+    raw = os.environ.get("RESTRICT_WRITE", "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def _apply_restrict_write(install_root: Path | str) -> None:
+    """Patch opencode.json's write/edit permission from RESTRICT_WRITE when set;
+    leave the setup-baked value when unset.
+
+    Fail-closed: when ``RESTRICT_WRITE=1`` is explicitly requested but the config
+    cannot be read, ``RuntimeError`` is raised so the launch aborts loudly rather
+    than silently leaving the agent unrestricted (audit finding C-3).
+    """
+    want = _restrict_write_env()
+    if want is None:
+        return
+    cfg_path = Path(install_root) / "opencode.json"
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        if want:
+            raise RuntimeError(
+                "RESTRICT_WRITE=1 but opencode.json is missing or malformed"
+            ) from None
+        return
+    val = "deny" if want else "allow"
+    for block in (cfg.get("permission"),
+                  cfg.get("agent", {}).get("workspace-assistant", {}).get("permission")):
+        if isinstance(block, dict):
+            block["write"] = val
+            block["edit"] = val
+    # Atomic write via sibling .tmp + os.replace so a crash mid-write never
+    # leaves a truncated opencode.json (which OpenCode would silently accept
+    # as valid and start with an empty config, defeating RESTRICT_WRITE).
+    tmp = cfg_path.with_suffix(cfg_path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, cfg_path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _ensure_present_notes_root(install_root: Path | str) -> None:
+    """Patch ``opencode.json`` so the present MCP server always gets ``NOTES_ROOT``.
+
+    Migration for pre-propose-mcp-tool configs that lack the environment block.
+    Uses atomic write via ``.tmp`` + ``os.replace`` (same pattern as
+    ``_apply_restrict_write``) so a crash never leaves a truncated config.
+    """
+    cfg_path = Path(install_root) / "opencode.json"
+    if not cfg_path.is_file():
+        return
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    present = cfg.get("mcp", {}).get("present")
+    if not isinstance(present, dict):
+        return
+    env = present.setdefault("environment", {})
+    if "NOTES_ROOT" in env:
+        return  # already migrated
+    env["NOTES_ROOT"] = str(install_root)
+    tmp = cfg_path.with_suffix(cfg_path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, cfg_path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def main() -> int:
     from bootstrap_env import EnvSpec, preflight_env
 
@@ -175,6 +259,11 @@ def main() -> int:
         EnvSpec(
             "WEB_PORT", default="8000", parser=_port_parser,
             hint="port the FastAPI frontend listens on (must be an integer, 1–65535)",
+        ),
+        EnvSpec(
+            "RESTRICT_WRITE", default="",
+            hint="restrict the agent to tool-based edits (deny write/edit): "
+                 "1/0; empty keeps the setup-baked default",
         ),
     ])
     install_root = Path(os.environ.get("INSTALL_ROOT") or str(Path.home() / "cos-notes")).resolve()
@@ -230,6 +319,17 @@ def main() -> int:
         if not port_is_free(p):
             print(f"ERROR: port {p} is in use; free it or set OPENCODE_PORT/WEB_PORT.", file=sys.stderr)
             return 2
+
+    # Patch write/edit perms from RESTRICT_WRITE (1/0). When unset, the
+    # setup-baked default in opencode.json is left in place. Done here so the
+    # patch lands before OpenCode reads the file at startup.
+    _apply_restrict_write(install_root)
+
+    # Migration: ensure the present MCP server's environment block always has
+    # NOTES_ROOT (PR #propose-mcp-tool added it to the config builder; existing
+    # opencode.json files generated before that change lack it). Without this,
+    # the present server would raise a RuntimeError on startup.
+    _ensure_present_notes_root(install_root)
 
     # A per-run random password authenticates the localhost OpenCode server so
     # other local processes/users cannot drive the sandboxed agent (design §8).

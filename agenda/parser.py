@@ -8,7 +8,12 @@ import yaml
 
 from agenda.models import Action
 
+# Lockstep constant with frontend/proposal.py:ID_LENGTH (6).
+# Duplicated so agenda stays free of a frontend dependency.
+_ID_LENGTH = 6
+
 _PRIORITY_RE = re.compile(r"^\(([A-D])\)$")
+_ID_RE = re.compile(rf"^id:([a-z0-9]{{{_ID_LENGTH}}})$")
 _DATE_KEYS = {"due", "t", "upd"}
 
 
@@ -48,6 +53,8 @@ def parse_task_line(line: str) -> Action | None:
             action.topics.append(tok[1:])
         elif tok.startswith("@") and len(tok) > 1:
             action.contexts.append(tok[1:])
+        elif _ID_RE.match(tok):
+            action.id = _ID_RE.match(tok).group(1)
         elif ":" in tok and tok.split(":", 1)[0] in _DATE_KEYS:
             key, value = tok.split(":", 1)
             parsed = _parse_date(value)

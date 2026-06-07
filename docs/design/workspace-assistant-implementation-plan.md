@@ -292,6 +292,18 @@ response; no direct browser→OpenCode route.
 - **TN4.4 — Changelog render.** Render the per-ingest changelog and an `undo`
   affordance.
 
+> **Ingest is propose-confirm by construction.** The agent never writes
+> `tasks.todo.txt` / `topics/*.md` / `meetings/*` directly — it calls the
+> `present_propose` MCP tool (served by the present MCP server alongside
+> `present`; ADR-0006/0009), which stages a structured proposal at
+> `inbox/_proposal.json`. The frontend shows the proposal to the user
+> (reusing the sweep-panel) and applies the confirmed proposal
+> deterministically. The shared validation schema (slug regex, section
+> literal set, list caps `MAX_ACTIONS=50` / `MAX_TOPICS=20` /
+> `MAX_MEETINGS=10`, per-field length caps, 1 MiB total JSON cap) lives in
+> `frontend/proposal.py` and is imported by `presenter/server.py` so the
+> MCP entry and the HTTP apply boundary stay in lock-step.
+
 **Acceptance Gate.** Text streams progressively; buttons drive the loop; uploads
 land in `documents/` with `.md` siblings; changelog + undo are visible.
 

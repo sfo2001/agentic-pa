@@ -67,3 +67,18 @@ def test_bh30_invalid_date_tokens_consumed_from_description():
     assert "due:not-a-date" in a.description, (
         "Invalid date token 'due:not-a-date' was silently consumed from description"
     )
+
+
+# ── id: tag parsing ─────────────────────────────────────────────────────────
+
+
+def test_parse_extracts_id_and_strips_from_description():
+    a = parse_task_line("(A) Prepare org chart +presentation due:2026-06-09 upd:2026-06-06 id:ab12cd")
+    assert a.id == "ab12cd"
+    assert "id:ab12cd" not in a.description
+    assert a.description == "Prepare org chart"
+
+
+def test_parse_id_absent_is_none():
+    a = parse_task_line("(B) something +topic upd:2026-06-06")
+    assert a.id is None

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 from pathlib import Path
 
@@ -712,3 +713,71 @@ def test_setup_wizard_main_invokes_preflight_first(monkeypatch):
         setup_wizard.main()
     assert exc.value.code == 99
     assert "COS_PYSITE" in captured["names"]
+
+
+# ── _restrict_write_env unit tests ──────────────────────────────────────────
+
+
+def test_restrict_write_env_true_variants(monkeypatch):
+    from launcher.run import _restrict_write_env
+    for val in ("1", "true", "TRUE", "True", "yes", "YES", "on", "ON"):
+        monkeypatch.setenv("RESTRICT_WRITE", val)
+        assert _restrict_write_env() is True, f"{val!r} should be True"
+
+
+def test_restrict_write_env_false_variants(monkeypatch):
+    from launcher.run import _restrict_write_env
+    for val in ("0", "false", "FALSE", "False", "no", "NO", "off", "OFF"):
+        monkeypatch.setenv("RESTRICT_WRITE", val)
+        assert _restrict_write_env() is False, f"{val!r} should be False"
+
+
+def test_restrict_write_env_none_variants(monkeypatch):
+    from launcher.run import _restrict_write_env
+    monkeypatch.delenv("RESTRICT_WRITE", raising=False)
+    assert _restrict_write_env() is None
+    monkeypatch.setenv("RESTRICT_WRITE", "")
+    assert _restrict_write_env() is None
+    monkeypatch.setenv("RESTRICT_WRITE", "garbage")
+    assert _restrict_write_env() is None
+    monkeypatch.setenv("RESTRICT_WRITE", "2")
+    assert _restrict_write_env() is None
+
+
+# ── Phase 5: launcher _apply_restrict_write ─────────────────────────────────
+
+
+def _write_cfg(p, write="allow"):
+    p.write_text(json.dumps({
+        "permission": {"write": write, "edit": write, "present_*": "allow"},
+        "agent": {"workspace-assistant": {"permission": {"write": write, "edit": write}}},
+    }), encoding="utf-8")
+
+
+def test_apply_restrict_write_denies_when_env_true(tmp_path, monkeypatch):
+    from launcher.run import _apply_restrict_write
+    cfg = tmp_path / "opencode.json"
+    _write_cfg(cfg, "allow")
+    monkeypatch.setenv("RESTRICT_WRITE", "1")
+    _apply_restrict_write(tmp_path)
+    c = json.loads(cfg.read_text())
+    assert c["permission"]["write"] == "deny"
+    assert c["agent"]["workspace-assistant"]["permission"]["edit"] == "deny"
+
+
+def test_apply_restrict_write_allows_when_env_false(tmp_path, monkeypatch):
+    from launcher.run import _apply_restrict_write
+    cfg = tmp_path / "opencode.json"
+    _write_cfg(cfg, "deny")
+    monkeypatch.setenv("RESTRICT_WRITE", "0")
+    _apply_restrict_write(tmp_path)
+    assert json.loads(cfg.read_text())["permission"]["write"] == "allow"
+
+
+def test_apply_restrict_write_unset_leaves_baked(tmp_path, monkeypatch):
+    from launcher.run import _apply_restrict_write
+    cfg = tmp_path / "opencode.json"
+    _write_cfg(cfg, "deny")
+    monkeypatch.delenv("RESTRICT_WRITE", raising=False)
+    _apply_restrict_write(tmp_path)
+    assert json.loads(cfg.read_text())["permission"]["write"] == "deny"  # baked default kept

@@ -69,6 +69,7 @@ def test_apply_diary_skipped_when_empty():
 
 
 def test_apply_actions_appends_lines_with_trailing_newline():
+    import re as _re
     root = _root()
     (root / "tasks.todo.txt").write_text("(A) existing thing +foo upd:2026-06-01\n", encoding="utf-8")
     summary = proposal.apply_proposal(
@@ -81,15 +82,23 @@ def test_apply_actions_appends_lines_with_trailing_newline():
     assert summary["actions"] == 2
     lines = (root / "tasks.todo.txt").read_text(encoding="utf-8").splitlines()
     assert lines[0] == "(A) existing thing +foo upd:2026-06-01"
-    assert lines[1] == "(B) call vendor +hw t:2026-06-11 upd:2026-06-04"
-    assert lines[2] == "(C) email bob @office upd:2026-06-04"
+    # New lines are stamped with a fresh id: — assert the prefix survives and
+    # the line ends with a valid 6-char base36 id.
+    assert lines[1].startswith("(B) call vendor +hw t:2026-06-11 upd:2026-06-04 ")
+    assert _re.search(r" id:[a-z0-9]{6}$", lines[1])
+    assert lines[2].startswith("(C) email bob @office upd:2026-06-04 ")
+    assert _re.search(r" id:[a-z0-9]{6}$", lines[2])
 
 
 def test_apply_actions_creates_file_if_absent():
+    import re as _re
     root = _root()
     proposal.apply_proposal(root, {"diary": "", "actions": ["(A) x +y upd:2026-06-04"],
                                    "topics": [], "meetings": []}, now=datetime.datetime(2026, 6, 4))
-    assert (root / "tasks.todo.txt").read_text(encoding="utf-8") == "(A) x +y upd:2026-06-04\n"
+    body = (root / "tasks.todo.txt").read_text(encoding="utf-8")
+    # Action text preserved; the applier stamped a fresh id: at end of line.
+    assert body.startswith("(A) x +y upd:2026-06-04 ")
+    assert _re.search(r" id:[a-z0-9]{6}\n$", body)
 
 
 TOPIC_TEMPLATE = (
@@ -141,7 +150,7 @@ def test_apply_meeting_writes_record_in_exact_format():
     )
     assert summary["meetings"] == 1
     body = (root / "meetings" / "2026-06-04" / "atlas-sync.md").read_text(encoding="utf-8")
-    assert body.startswith("---\ndate: 2026-06-04\ntitle: Atlas sync\ntopics: [atlas]\n---\n")
+    assert body.startswith("---\ndate: 2026-06-04\ntitle: Atlas sync\ntopics:\n- atlas\n---\n")
     assert "## Summary\nDiscussed lag." in body
     assert "## Decisions\nRebuild index." in body
     assert "## Raw notes\nraw notes here" in body
@@ -244,17 +253,19 @@ def test_apply_actions_preserves_literal_backslash_n():
 
 
 def test_apply_actions_strips_c0_and_unicode_line_separators():
-    """L-1: NUL, the remaining C0 controls, and U+2028/U+2029/U+0085 are
+    """L-1: NUL, C0 controls, C1 controls (\x80-\x9f), and U+2028/U+2029 are
     flattened to space — they shouldn't smuggle a second action line via a
     downstream parser that treats them as line breaks."""
     root = _root()
-    # NUL + form feed + line separator + paragraph separator
+    # NUL + form feed + line separator + paragraph separator + C1 controls
     actions = [
         "(B) x +y upd:2026-06-04\x00(A) nul",
         "(B) x +y upd:2026-06-04\x0c(B) ff",
         "(B) x +y upd:2026-06-04\u2028(B) ls",
         "(B) x +y upd:2026-06-04\u2029(B) ps",
         "(B) x +y upd:2026-06-04\u0085(B) nel",
+        "(B) x +y upd:2026-06-04\x80(B) c1_80",
+        "(B) x +y upd:2026-06-04\x9f(B) c1_9f",
     ]
     proposal.apply_proposal(
         root,
@@ -262,13 +273,13 @@ def test_apply_actions_strips_c0_and_unicode_line_separators():
         now=datetime.datetime(2026, 6, 4),
     )
     body = (root / "tasks.todo.txt").read_text(encoding="utf-8")
-    # Exactly five lines (no smuggled entries).
-    assert len(body.splitlines()) == 5
-    # The smuggled priority markers (A) (B) survive but are flattened into the
+    # Exactly seven lines (no smuggled entries).
+    assert len(body.splitlines()) == 7
+    # The smuggled priority markers survive but are flattened into the
     # original action's prose — they are NOT on a separate line.
-    for tag in ("(A) nul", "(B) ff", "(B) ls", "(B) ps", "(B) nel"):
+    for tag in ("(A) nul", "(B) ff", "(B) ls", "(B) ps", "(B) nel", "(B) c1_80", "(B) c1_9f"):
         assert tag in body
-        # And no line in the file starts with one of the smuggled markers.
+    # And no line in the file starts with one of the smuggled markers.
     for line in body.splitlines():
         assert not (line.startswith("(A) ") and "nul" in line and len(line) < 30)
 
@@ -717,3 +728,276 @@ def test_apply_actions_preserves_windows_path_with_backslashes():
     # *text* in any extension are preserved.
     assert "C:\\new\\release" in lines[0]
     assert lines[0].startswith("(B) ")
+
+
+# ── validate_action_dates (date-sanity gate used by the propose tool) ────────
+
+
+def test_validate_action_dates_clean_due_only():
+    assert proposal.validate_action_dates(
+        ["(A) prepare org chart +presentation due:2026-06-09 upd:2026-06-06"]
+    ) == []
+
+
+def test_validate_action_dates_clean_tickler_before_due():
+    assert proposal.validate_action_dates(
+        ["(A) do thing due:2026-06-12 t:2026-06-10 upd:2026-06-06"]
+    ) == []
+
+
+def test_validate_action_dates_tickler_equal_due_is_ok():
+    assert proposal.validate_action_dates(
+        ["(A) do thing due:2026-06-10 t:2026-06-10 upd:2026-06-06"]
+    ) == []
+
+
+def test_validate_action_dates_flags_tickler_after_due():
+    """The exact 2026-06-05 bug shape: a reminder set *after* the deadline."""
+    errs = proposal.validate_action_dates(
+        ["(A) org chart for presentation due:2026-06-09 t:2026-06-12 upd:2026-06-06"]
+    )
+    assert len(errs) == 1
+    assert "after due:2026-06-09" in errs[0]
+
+
+def test_validate_action_dates_flags_malformed_due():
+    errs = proposal.validate_action_dates(["(A) x due:2026-13-45 upd:2026-06-06"])
+    assert len(errs) == 1
+    assert "invalid due:" in errs[0]
+
+
+def test_validate_action_dates_flags_malformed_tickler():
+    errs = proposal.validate_action_dates(["(B) x t:not-a-date upd:2026-06-06"])
+    assert len(errs) == 1
+    assert "invalid t:" in errs[0]
+
+
+def test_validate_action_dates_ignores_t_inside_upd():
+    """`upd:` (and other tokens) must not be mistaken for a tickler `t:` token."""
+    assert proposal.validate_action_dates(["(B) x +y upd:2026-06-06"]) == []
+
+
+def test_validate_action_dates_empty_list():
+    assert proposal.validate_action_dates([]) == []
+
+
+# ── id: stamping on append (Phase 1 — Action identity) ─────────────────────
+
+
+def test_gen_id_is_six_base36():
+    import re as _re
+    for _ in range(50):
+        assert _re.fullmatch(r"[a-z0-9]{6}", proposal.gen_id())
+
+
+def test_id_bare_pattern_lockstep():
+    """ID_BARE_RE must match gen_id() output — lockstep guard."""
+    for _ in range(100):
+        assert proposal.ID_BARE_RE.fullmatch(proposal.gen_id())
+    # Also verify _ID_TOKEN_RE (used by search/findall) matches the full form.
+    id_val = proposal.gen_id()
+    full = f"id:{id_val}"
+    assert proposal._ID_TOKEN_RE.search(full)
+
+
+def test_append_actions_stamps_id_when_absent(tmp_path):
+    import re as _re
+    proposal._append_actions(tmp_path, ["(A) do thing +t upd:2026-06-06"])
+    line = (tmp_path / "tasks.todo.txt").read_text(encoding="utf-8").strip()
+    assert _re.search(r" id:[a-z0-9]{6}$", line)
+
+
+def test_append_actions_preserves_existing_id(tmp_path):
+    proposal._append_actions(tmp_path, ["(A) do thing upd:2026-06-06 id:keepme"])
+    line = (tmp_path / "tasks.todo.txt").read_text(encoding="utf-8").strip()
+    assert line.endswith("id:keepme")
+    assert line.count("id:") == 1
+
+
+def test_backfill_ids_stamps_only_unstamped(tmp_path):
+    import re as _re
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(A) already +t upd:2026-06-06 id:fixed1\n"
+        "(B) needs one +t upd:2026-06-06\n"
+        "\n"
+        "# a comment\n",
+        encoding="utf-8",
+    )
+    n = proposal.backfill_ids(tmp_path)
+    assert n == 1
+    lines = (tmp_path / "tasks.todo.txt").read_text(encoding="utf-8").splitlines()
+    assert lines[0].endswith("id:fixed1")              # untouched
+    assert _re.search(r" id:[a-z0-9]{6}$", lines[1])   # stamped
+    assert lines[2] == "" and lines[3] == "# a comment"  # blanks/comments preserved
+    # idempotent: second run stamps nothing
+    assert proposal.backfill_ids(tmp_path) == 0
+
+
+def test_backfill_ids_no_file(tmp_path):
+    assert proposal.backfill_ids(tmp_path) == 0
+
+
+# ── apply_task_ops (Phase 2 — Mutation application) ────────────────────────
+
+
+def _seed(tmp_path):
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(A) org chart +presentation due:2026-06-09 upd:2026-06-06 id:aaa111\n"
+        "(B) call vendor +hw t:2026-06-12 upd:2026-06-06 id:bbb222\n",
+        encoding="utf-8",
+    )
+
+
+def test_apply_task_ops_complete(tmp_path):
+    import datetime as _dt
+    _seed(tmp_path)
+    res = proposal.apply_task_ops(tmp_path, [{"id": "aaa111", "op": "complete"}],
+                                  now=_dt.date(2026, 6, 7))
+    assert res["applied"] == 1 and res["errors"] == []
+    line = [line for line in (tmp_path/"tasks.todo.txt").read_text().splitlines() if "aaa111" in line][0]
+    assert line.startswith("x ")
+    assert "upd:2026-06-07" in line  # upd bumped
+
+
+def test_apply_task_ops_reprioritize(tmp_path):
+    import datetime as _dt
+    _seed(tmp_path)
+    proposal.apply_task_ops(tmp_path, [{"id": "bbb222", "op": "reprioritize", "value": "A"}],
+                            now=_dt.date(2026, 6, 7))
+    line = [line for line in (tmp_path/"tasks.todo.txt").read_text().splitlines() if "bbb222" in line][0]
+    assert line.startswith("(A) ")
+    assert "(B)" not in line
+
+
+def test_apply_task_ops_retickle(tmp_path):
+    import datetime as _dt
+    _seed(tmp_path)
+    proposal.apply_task_ops(tmp_path, [{"id": "bbb222", "op": "retickle", "value": "2026-06-08"}],
+                            now=_dt.date(2026, 6, 7))
+    line = [line for line in (tmp_path/"tasks.todo.txt").read_text().splitlines() if "bbb222" in line][0]
+    assert "t:2026-06-08" in line and "t:2026-06-12" not in line
+
+
+def test_apply_task_ops_unknown_id_reported(tmp_path):
+    import datetime as _dt
+    _seed(tmp_path)
+    res = proposal.apply_task_ops(tmp_path, [{"id": "zzz999", "op": "complete"}],
+                                  now=_dt.date(2026, 6, 7))
+    assert res["applied"] == 0
+    assert any("zzz999" in e for e in res["errors"])
+
+
+# ── Phase 4: unified apply_proposal with task_ops ──────────────────────────
+
+
+def test_apply_proposal_with_task_ops_applies_both(tmp_path):
+    """apply_proposal with task_ops must apply proposal fields AND task
+    mutations under the same call, returning a merged summary."""
+    import datetime as _dt
+    _seed(tmp_path)
+    prop = {
+        "diary": "Sweep notes.",
+        "actions": ["(A) new task +x upd:2026-06-07"],
+        "topics": [],
+        "meetings": [],
+    }
+    task_ops_list = [{"id": "aaa111", "op": "complete"}]
+    summary = proposal.apply_proposal(
+        tmp_path, prop,
+        now=_dt.datetime(2026, 6, 7, 10, 0),
+        task_ops=task_ops_list,
+    )
+    assert summary["diary"] is True
+    assert summary["actions"] == 1
+    assert summary["task_ops"]["applied"] == 1
+    assert summary["task_ops"]["errors"] == []
+    # Verify the task was actually completed
+    lines = (tmp_path / "tasks.todo.txt").read_text(encoding="utf-8").splitlines()
+    assert any(ln.startswith("x ") and "aaa111" in ln for ln in lines)
+
+
+def test_apply_proposal_rolls_back_task_ops_on_failure(monkeypatch):
+    """When _apply_topics raises after task_ops have been applied, the
+    task_ops mutation is rolled back along with all other writes."""
+    import datetime as _dt
+
+    import frontend.proposal as proposal_mod
+
+    tmp_path = _root()
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(A) existing +x upd:2026-06-06 id:aaa111\n", encoding="utf-8")
+    orig_content = (tmp_path / "tasks.todo.txt").read_text(encoding="utf-8")
+
+    def _boom(_notes_root, _topics, _now):
+        raise RuntimeError("simulated topics failure")
+
+    monkeypatch.setattr(proposal_mod, "_apply_topics", _boom)
+
+    with pytest.raises(RuntimeError, match="simulated topics failure"):
+        proposal.apply_proposal(
+            tmp_path,
+            {"diary": "", "actions": [], "topics": [{"slug": "atlas",
+             "section": "## Current state", "text": "x"}], "meetings": []},
+            now=_dt.datetime(2026, 6, 7),
+            task_ops=[{"id": "aaa111", "op": "complete"}],
+        )
+
+    # tasks.todo.txt must be restored byte-for-byte (task_ops undone).
+    assert (tmp_path / "tasks.todo.txt").read_text(encoding="utf-8") == orig_content
+
+
+# ── MAX_TASK_OPS constant ──────────────────────────────────────────────────
+
+
+def test_id_length_lockstep_with_agenda():
+    """ID_LENGTH in frontend.proposal matches the duplicated constant in agenda/parser.py.
+    If they diverge, id: tags written by one package won't be parseable by the other."""
+    from agenda.parser import _ID_LENGTH
+    assert proposal.ID_LENGTH == _ID_LENGTH
+
+
+def test_max_task_ops_value():
+    """MAX_TASK_OPS matches the cap used in the Pydantic model."""
+    assert proposal.MAX_TASK_OPS == 50
+
+
+def _write_tasks(root: Path, line: str) -> None:
+    (root / "tasks.todo.txt").write_text(line, encoding="utf-8")
+
+
+def test_apply_task_ops_no_file(tmp_path):
+    """Missing tasks.todo.txt returns error with zero applied."""
+    result = proposal.apply_task_ops(
+        tmp_path, [{"id": "abc123", "op": "complete"}]
+    )
+    assert result == {"applied": 0, "errors": ["no tasks.todo.txt; ops: 1"]}
+
+
+def test_apply_task_ops_bad_op(tmp_path):
+    """Unknown op returns an error and is skipped."""
+    _write_tasks(tmp_path, "(A) a task id:abc123\n")
+    result = proposal.apply_task_ops(
+        tmp_path, [{"id": "abc123", "op": "delete"}]
+    )
+    assert result["applied"] == 0
+    assert any("unknown op" in e for e in result["errors"])
+
+
+def test_apply_task_ops_bad_reprioritize_value(tmp_path):
+    """reprioritize with value outside A-D returns an error."""
+    _write_tasks(tmp_path, "(A) a task id:abc123\n")
+    result = proposal.apply_task_ops(
+        tmp_path, [{"id": "abc123", "op": "reprioritize", "value": "E"}]
+    )
+    assert result["applied"] == 0
+    assert any("A-D" in e for e in result["errors"])
+
+
+def test_apply_task_ops_bad_retickle_date(tmp_path):
+    """retickle with an invalid date returns an error."""
+    _write_tasks(tmp_path, "(A) a task id:abc123\n")
+    result = proposal.apply_task_ops(
+        tmp_path, [{"id": "abc123", "op": "retickle", "value": "bad-date"}]
+    )
+    assert result["applied"] == 0
+    assert any("invalid date" in e for e in result["errors"])

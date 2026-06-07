@@ -94,6 +94,7 @@ def init_install(
     python_executable: str,
     api_key: str | None = None,
     mcp_pythonpath: str | None = None,
+    restrict_write: bool = False,
 ) -> dict:
     """Create (or verify) the Chief-of-Staff Notes install layout.
 
@@ -195,6 +196,7 @@ def init_install(
         prompt_path=str(prompt_dest),
         api_key=api_key,
         mcp_pythonpath=mcp_pythonpath,
+        restrict_write=restrict_write,
     )
     opencode_json = root / "opencode.json"
     opencode_json.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")

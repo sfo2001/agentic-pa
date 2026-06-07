@@ -255,6 +255,10 @@ def main() -> int:
     endpoint, api_key = _collect_endpoint("http://localhost:11434/v1")
     model_id = _choose_model(endpoint, api_key)
 
+    restrict_write = _yes(
+        "Restrict the assistant to tool-based edits? "
+        "(recommended for smaller/local models)", default=True)
+
     default_root = str(Path.home() / "cos-notes")
     while True:
         install_root = Path(_prompt("Install location", default_root)).expanduser()
@@ -288,6 +292,7 @@ def main() -> int:
         python_executable=sys.executable,
         api_key=api_key,
         mcp_pythonpath=cos_pysite,
+        restrict_write=restrict_write,
     )
     print(f"  ✓ workspace:    {layout['workspace']}")
     print(f"  ✓ config:       {layout['opencode_json']}  (machine-specific, not committed)")
