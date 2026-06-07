@@ -173,9 +173,23 @@ const sweepConfirm = document.getElementById("sweep-confirm");
 const sweepCancel = document.getElementById("sweep-cancel");
 // Wrap in an object so the reference itself is `const` (the slot is
 // reassigned by setSweepContext/clearSweepContext, not the variable).
-const sweepContext = { current: null };  // {proposal, capture, session, last_id}
-const setSweepContext = (ctx) => { sweepContext.current = ctx; };
-const clearSweepContext = () => { sweepContext.current = null; };
+// `{proposal, capture?, session?, last_id?, mcp?}` — `mcp: true` marks an
+// agent-staged proposal (the one the user is asked to file); otherwise
+// it's a Sweep flow. The header text is derived from this flag so the
+// two flows can't overwrite each other's label.
+const sweepContext = { current: null };
+const setSweepContext = (ctx) => {
+  sweepContext.current = ctx;
+  // Header text is a function of the proposal's source (MCP vs Sweep), not
+  // a side effect of each render — set here so a chat-driven MCP proposal
+  // landing while a Sweep is in-flight (or vice versa) cannot clobber the
+  // visible label.
+  sweepPanelHeader.textContent = ctx && ctx.mcp ? "Proposal to file" : "Sweep proposal";
+};
+const clearSweepContext = () => {
+  sweepContext.current = null;
+  sweepPanelHeader.textContent = "";  // reset so the next setSweepContext wins
+};
 
 function _clearSweepPanel() {
   sweepDiary.value = "";
@@ -208,7 +222,6 @@ async function runSweep() {
   if (composer.getAttribute("aria-disabled") === "true") return;
   setBusy(true);
   _clearSweepPanel();
-  sweepPanelHeader.textContent = "Sweep proposal";
   try {
     const r = await fetch("/api/sweep", { method: "POST" });
     const j = await r.json();
@@ -308,10 +321,21 @@ sweepConfirm.addEventListener("click", async () => {
 });
 
 // ── MCP proposal: the agent's present_propose stages inbox/_proposal.json.
-// Surface it in the same review panel (after each turn and on load) and confirm
-// via /api/proposal/confirm. Without this the staged proposal is invisible —
-// present_propose "completes" but nothing actionable appears in the UI.
+// Surface it in the same review panel (on load and on the done/error of each
+// turn) and confirm via /api/proposal/confirm. Without this the staged
+// proposal is invisible — present_propose "completes" but nothing actionable
+// appears in the UI.
+//
+// Concurrency: an in-flight guard prevents two overlapping polls from
+// interleaving. With the SSE-event-source-per-turn design, two rapid user
+// messages can produce overlapping `finish()` paths, each starting a
+// fetch("/api/proposal"). The second call is skipped (a no-op), so the panel
+// reflects whichever response arrives first — and re-rendering the same
+// content is idempotent.
+let _proposalCheckInFlight = false;
 async function checkPendingProposal() {
+  if (_proposalCheckInFlight) return;
+  _proposalCheckInFlight = true;
   try {
     const r = await fetch("/api/proposal");
     if (r.status === 404) return;            // nothing staged — the common case
@@ -319,12 +343,12 @@ async function checkPendingProposal() {
     if (!r.ok || !j.ok || !j.proposal) return;
     _clearSweepPanel();
     setSweepContext({ proposal: j.proposal, mcp: true });
-    sweepPanelHeader.textContent = "Proposal to file";
     sweepDiary.value = j.proposal.diary || "";
     _renderSweepList(sweepActions, j.proposal.actions || [], "action");
     _renderSweepList(sweepTopics, j.proposal.topics || [], "topic");
     sweepPanel.hidden = false;
   } catch (_) { /* transient; the next turn re-checks */ }
+  finally { _proposalCheckInFlight = false; }
 }
 
 refreshInbox();
