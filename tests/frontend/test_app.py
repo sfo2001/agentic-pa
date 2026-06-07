@@ -918,3 +918,146 @@ async def test_lifespan_backfills_ids(tmp_path):
         pass  # entering the manager runs startup
     import re
     assert re.search(r" id:[a-z0-9]{6}$", (tmp_path / "tasks.todo.txt").read_text().strip())
+
+
+# ── Task 2: POST /api/task_op ────────────────────────────────────────────────
+
+
+def _app_with_root(root):
+    oc = OpenCodeClient(
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=make_fake_opencode([])),
+            base_url="http://oc"),
+        agent="workspace-assistant")
+    return create_app(NotesProxy(oc), notes_root=root)
+
+
+async def test_task_op_stages_and_returns_ok(tmp_path):
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(B) Sign off Atlas +atlas upd:2026-06-04 id:abc123\n", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/task_op", json={"id": "abc123", "op": "complete", "value": None})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    data = json.loads((tmp_path / "inbox" / "_proposal.json").read_text())
+    assert data["task_ops"] == [{"id": "abc123", "op": "complete", "value": None}]
+
+
+async def test_task_op_unknown_id_returns_400(tmp_path):
+    (tmp_path / "tasks.todo.txt").write_text("(B) x +t upd:2026-06-04 id:abc123\n", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/task_op", json={"id": "zzz999", "op": "complete", "value": None})
+    assert r.status_code == 400 and r.json()["ok"] is False
+
+
+# ── Task 3: GET /api/actions ────────────────────────────────────────────────
+
+
+async def test_actions_returns_buckets(tmp_path):
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(A) Urgent thing +atlas due:2026-06-09 upd:2026-06-04 id:aaa111\n"
+        "(B) Later thing +atlas upd:2026-06-04 id:bbb222\n", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/actions")
+    assert r.status_code == 200
+    j = r.json()
+    assert set(j["buckets"]) >= {"do_now", "schedule", "resurfacing", "overdue", "stale_important"}
+    assert any(a["id"] == "aaa111" for a in j["buckets"]["do_now"])
+    assert any(a["id"] == "bbb222" for a in j["buckets"]["schedule"])
+    assert j["truncated"] is False
+
+
+# ── Task 4: GET /api/diary/today ────────────────────────────────────────────
+
+
+async def test_diary_today_renders_markdown(tmp_path):
+    (tmp_path / "diary").mkdir()
+    (tmp_path / "diary" / f"{datetime.date.today():%Y-%m-%d}.md").write_text("# Heading\n\nbody", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/diary/today")
+    assert r.status_code == 200
+    assert "<h1>" in r.json()["html"]
+
+
+async def test_diary_today_404_when_absent(tmp_path):
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/diary/today")
+    assert r.status_code == 404
+
+
+async def test_diary_today_over_cap_returns_empty_state(tmp_path):
+    from frontend.render import MAX_DIARY_RENDER_BYTES
+    (tmp_path / "diary").mkdir()
+    (tmp_path / "diary" / f"{datetime.date.today():%Y-%m-%d}.md").write_text("x" * (MAX_DIARY_RENDER_BYTES + 1), encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/diary/today")
+    assert r.status_code == 200
+    assert r.json()["html"] is None and r.json()["large"] is True
+
+
+# ── Task 5: GET /api/brief/today ────────────────────────────────────────────
+
+
+async def test_brief_today_renders(tmp_path):
+    (tmp_path / "briefs").mkdir()
+    (tmp_path / "briefs" / f"{datetime.date.today():%Y-%m-%d}-daily.md").write_text("## Today\n\n- item", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/brief/today")
+    assert r.status_code == 200 and "<h2>" in r.json()["html"]
+
+
+async def test_brief_today_404_when_absent(tmp_path):
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/brief/today")
+    assert r.status_code == 404
+
+
+# ── Task 6: Truncation & boundary tests ──────────────────────────────────────
+
+
+async def test_actions_truncates_when_over_limit(tmp_path):
+    lines = "\n".join(
+        f"(B) Task {i} +t due:2099-12-31 upd:2026-06-04 id:{i:06d}"
+        for i in range(510)
+    )
+    (tmp_path / "tasks.todo.txt").write_text(lines, encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/actions")
+    assert r.status_code == 200
+    j = r.json()
+    assert j["truncated"] is True
+    total = sum(len(v) for v in j["buckets"].values())
+    assert total <= 500
+
+
+async def test_diary_today_at_cap_renders_normally(tmp_path):
+    from frontend.render import MAX_DIARY_RENDER_BYTES
+    (tmp_path / "diary").mkdir()
+    (tmp_path / "diary" / f"{datetime.date.today():%Y-%m-%d}.md").write_text(
+        "x" * MAX_DIARY_RENDER_BYTES, encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/diary/today")
+    assert r.status_code == 200
+    assert r.json()["html"] is not None
+    assert r.json()["large"] is False
+
+
+async def test_brief_today_over_cap_returns_empty_state(tmp_path):
+    from frontend.render import MAX_DIARY_RENDER_BYTES
+    (tmp_path / "briefs").mkdir()
+    (tmp_path / "briefs" / f"{datetime.date.today():%Y-%m-%d}-daily.md").write_text(
+        "x" * (MAX_DIARY_RENDER_BYTES + 1), encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/brief/today")
+    assert r.status_code == 200
+    assert r.json()["html"] is None and r.json()["large"] is True

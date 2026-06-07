@@ -37,6 +37,10 @@
         <h3>Topics</h3>
         <ul id="sweep-topics"></ul>
       </section>
+      <section>
+        <h3>Task mutations</h3>
+        <ul id="sweep-task-ops"></ul>
+      </section>
     </div>
     <div id="sweep-panel-footer">
       <button id="sweep-confirm" type="button">Confirm</button>
@@ -53,6 +57,12 @@
       </form>
     </section>
     <aside id="pane">
+      <div id="pane-tabs" role="tablist">
+        <button class="pane-tab is-active" data-tab="artifact">Artifact</button>
+        <button class="pane-tab" data-tab="actions">Actions</button>
+        <button class="pane-tab" data-tab="diary">Diary</button>
+        <button class="pane-tab" data-tab="brief">Brief</button>
+      </div>
       <div id="pane-header">Presentation</div>
       <div id="pane-body"><p class="pane-empty">Nothing presented yet.</p></div>
     </aside>

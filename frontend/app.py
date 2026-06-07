@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
+from agenda import engine
 from frontend import proposal, sweep, versioning, wiki
 from frontend.opencode_client import OpenCodeClient
 from frontend.proxy import NotesProxy, SessionLost
@@ -69,8 +71,11 @@ class _SweepMeetingEntry(BaseModel):
 
 class _SweepTaskOp(BaseModel):
     id: Annotated[str, Field(pattern=proposal.ID_BARE_PATTERN)]
-    op: Annotated[str, Field(pattern=r"^(complete|reprioritize|retickle)$")]
+    op: Annotated[str, Field(pattern=proposal.TASK_OP_PATTERN)]
     value: str | None = None
+
+
+_TaskOpBody = _SweepTaskOp
 
 
 class _SweepProposalBody(BaseModel):
@@ -175,7 +180,7 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
                 yield f"data: {json.dumps(evt)}\n\n"
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    from frontend.render import render_markdown
+    from frontend.render import MAX_DIARY_RENDER_BYTES, render_markdown
 
     @app.get("/api/file")
     async def get_file(path: str):
@@ -265,6 +270,53 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
                 except OSError:
                     pass
         return {"ok": True, "applied": summary, "committed": committed, "lint": findings}
+
+    _MAX_ACTIONS_RENDER = 500
+
+    @app.get("/api/actions")
+    async def actions():
+        view = engine.today(notes_root)
+        buckets = {k: view[k] for k in
+                   ("do_now", "overdue", "schedule", "resurfacing", "stale_important")}
+        total = sum(len(v) for v in buckets.values())
+        truncated = total > _MAX_ACTIONS_RENDER
+        if truncated:
+            seen = 0
+            for k in ("do_now", "overdue", "schedule", "resurfacing", "stale_important"):
+                room = max(0, _MAX_ACTIONS_RENDER - seen)
+                buckets[k] = buckets[k][:room]
+                seen += len(buckets[k])
+        return {"ok": True, "date": view["date"], "buckets": buckets, "truncated": truncated}
+
+    @app.get("/api/diary/today")
+    async def diary_today():
+        name = f"{datetime.date.today():%Y-%m-%d}.md"
+        path = notes_root / "diary" / name
+        if not path.is_file():
+            return JSONResponse(status_code=404, content={"ok": False, "error": "no diary today"})
+        if path.stat().st_size > MAX_DIARY_RENDER_BYTES:
+            return {"ok": True, "html": None, "large": True, "path": f"diary/{name}"}
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return {"ok": True, "html": render_markdown(text), "large": False, "path": f"diary/{name}"}
+
+    @app.get("/api/brief/today")
+    async def brief_today():
+        name = f"{datetime.date.today():%Y-%m-%d}-daily.md"
+        path = notes_root / "briefs" / name
+        if not path.is_file():
+            return JSONResponse(status_code=404, content={"ok": False, "error": "no brief today"})
+        if path.stat().st_size > MAX_DIARY_RENDER_BYTES:
+            return {"ok": True, "html": None, "large": True, "path": f"briefs/{name}"}
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return {"ok": True, "html": render_markdown(text), "large": False, "path": f"briefs/{name}"}
+
+    @app.post("/api/task_op")
+    async def task_op(body: _TaskOpBody):
+        async with git_lock:
+            res = proposal.stage_task_op(notes_root, body.id, body.op, body.value)
+        if not res["ok"]:
+            return JSONResponse(status_code=400, content=res)
+        return res
 
     @app.post("/api/upload")
     async def upload(file: UploadFile = File(...)):

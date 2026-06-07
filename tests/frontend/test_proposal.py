@@ -1,5 +1,6 @@
 """Structured proposal: parse + apply tests."""
 import datetime
+import json
 import tempfile
 from pathlib import Path
 
@@ -952,3 +953,58 @@ def test_apply_task_ops_bad_retickle_date(tmp_path):
     )
     assert result["applied"] == 0
     assert any("invalid date" in e for e in result["errors"])
+
+
+# ── Task 1: stage_task_op / load_staging helpers ─────────────────────────────
+
+
+def _seed_task(root, line="(B) Sign off Atlas design +atlas upd:2026-06-04 id:abc123"):
+    (root / "tasks.todo.txt").write_text(line + "\n", encoding="utf-8")
+
+
+def test_stage_task_op_appends_to_proposal(tmp_path):
+    _seed_task(tmp_path)
+    res = proposal.stage_task_op(tmp_path, "abc123", "complete", None)
+    assert res["ok"] is True
+    data = json.loads((tmp_path / "inbox" / "_proposal.json").read_text())
+    assert data["task_ops"] == [{"id": "abc123", "op": "complete", "value": None}]
+
+
+def test_stage_task_op_unknown_id_rejected(tmp_path):
+    _seed_task(tmp_path)
+    res = proposal.stage_task_op(tmp_path, "nope99", "complete", None)
+    assert res["ok"] is False
+    assert "no action" in res["error"]
+    assert not (tmp_path / "inbox" / "_proposal.json").exists()
+
+
+def test_stage_task_op_validates_op_and_value(tmp_path):
+    _seed_task(tmp_path)
+    assert proposal.stage_task_op(tmp_path, "abc123", "bogus", None)["ok"] is False
+    assert proposal.stage_task_op(tmp_path, "abc123", "reprioritize", "Z")["ok"] is False
+    assert proposal.stage_task_op(tmp_path, "abc123", "retickle", "not-a-date")["ok"] is False
+    assert proposal.stage_task_op(tmp_path, "abc123", "reprioritize", "A")["ok"] is True
+
+
+def test_stage_task_op_preserves_existing_staging(tmp_path):
+    _seed_task(tmp_path)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "_proposal.json").write_text(
+        json.dumps({"diary": "d", "actions": ["(B) x +t upd:2026-06-04"],
+                     "topics": [], "meetings": [], "task_ops": []}), encoding="utf-8")
+    proposal.stage_task_op(tmp_path, "abc123", "reprioritize", "A")
+    data = json.loads((inbox / "_proposal.json").read_text())
+    assert data["diary"] == "d" and len(data["actions"]) == 1
+    assert data["task_ops"] == [{"id": "abc123", "op": "reprioritize", "value": "A"}]
+
+
+def test_stage_task_op_corrupted_staging(tmp_path):
+    _seed_task(tmp_path)
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / "inbox" / "_proposal.json").write_text("not valid json", encoding="utf-8")
+    res = proposal.stage_task_op(tmp_path, "abc123", "complete", None)
+    assert res["ok"] is True
+    assert "warning" in res
+    data = json.loads((tmp_path / "inbox" / "_proposal.json").read_text())
+    assert data["task_ops"] == [{"id": "abc123", "op": "complete", "value": None}]

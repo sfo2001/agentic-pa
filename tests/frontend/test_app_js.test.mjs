@@ -64,7 +64,7 @@ const ELEMENT_IDS = [
   "chat", "composer", "input", "inbox-badge", "upload", "pane-body",
   "pane-header",  // set by showArtifact
   "sweep", "sweep-panel", "sweep-panel-header", "sweep-diary",
-  "sweep-actions", "sweep-topics", "sweep-confirm", "sweep-cancel",
+  "sweep-actions", "sweep-topics", "sweep-task-ops", "sweep-confirm", "sweep-cancel",
   "undo",
 ];
 const els = Object.fromEntries(ELEMENT_IDS.map((id) => [id, new Element(id)]));
@@ -98,6 +98,12 @@ assert.equal(typeof checkPendingProposal, "function",
   "checkPendingProposal must be defined as a top-level function in app.js");
 
 // ── Tests ────────────────────────────────────────────────────────────────
+
+// Verify exposed helpers
+assert.equal(typeof sandbox.humanizeTaskOp, "function",
+  "humanizeTaskOp must be defined as a top-level function in app.js");
+assert.ok(Array.isArray(sandbox.BUCKET_ORDER),
+  "BUCKET_ORDER must be an array in app.js");
 
 let passed = 0;
 let failed = 0;
@@ -187,6 +193,134 @@ await test("missing proposal field returns silently", async () => {
   await checkPendingProposal();
   assert.equal(els["sweep-panel"].hidden, true,
     "{ok:true, proposal:undefined} must short-circuit (no panel mutation)");
+});
+
+const humanizeTaskOp = sandbox.humanizeTaskOp;
+const BUCKET_ORDER = sandbox.BUCKET_ORDER;
+
+await test("bucket order is do_now, overdue, schedule, resurfacing, stale_important", () => {
+  assert.strictEqual(JSON.stringify(BUCKET_ORDER),
+    JSON.stringify(["do_now", "overdue", "schedule", "resurfacing", "stale_important"]));
+});
+
+await test("humanizeTaskOp renders description + verb (+value)", () => {
+  const a = { text: "Sign off Atlas design", id: "abc123" };
+  assert.strictEqual(humanizeTaskOp(a, "complete", null), "Sign off Atlas design  →  complete");
+  assert.strictEqual(humanizeTaskOp(a, "reprioritize", "A"), "Sign off Atlas design  →  reprioritize (A)");
+});
+
+// ── renderActions tests ──────────────────────────────────────────────────
+
+const renderActions = sandbox.renderActions;
+
+await test("renderActions populates buckets from API response", async () => {
+  resetEls();
+  setFetch(async () => ({
+    status: 200, ok: true,
+    json: async () => ({
+      ok: true, date: "2026-06-07",
+      buckets: {
+        do_now: [{ id: "a1", text: "Urgent", priority: "A" }],
+        schedule: [{ id: "b1", text: "Later", priority: "B" }],
+        resurfacing: [], stale_important: [], overdue: [],
+      },
+      truncated: false,
+    }),
+  }));
+  await renderActions();
+  assert.ok(els["pane-body"].children.length >= 2,
+    "must render at least the do_now and schedule bucket sections");
+  const firstLabel = els["pane-body"].children[0].children[1].children[0];
+  assert.ok(firstLabel && firstLabel.textContent.includes("Urgent"),
+    "do_now bucket must contain the Urgent action text");
+  assert.equal(els["pane-header"].textContent, "Actions",
+    "pane-header must be set to 'Actions'");
+});
+
+await test("renderActions shows empty state when no actions", async () => {
+  resetEls();
+  setFetch(async () => ({
+    status: 200, ok: true,
+    json: async () => ({
+      ok: true, date: "2026-06-07",
+      buckets: { do_now: [], overdue: [], schedule: [], resurfacing: [], stale_important: [] },
+      truncated: false,
+    }),
+  }));
+  await renderActions();
+  assert.ok(els["pane-body"].children.length === 0 &&
+    typeof els["pane-body"].innerHTML === "string" &&
+    els["pane-body"].innerHTML.includes("No open actions"),
+    "empty state must set innerHTML to empty-state message");
+});
+
+// ── renderFileTab tests ──────────────────────────────────────────────────
+
+const renderFileTab = sandbox.renderFileTab;
+
+await test("renderFileTab renders HTML from API", async () => {
+  resetEls();
+  setFetch(async () => ({
+    status: 200, ok: true,
+    json: async () => ({ ok: true, html: "<h1>Test Diary</h1>", large: false, path: "diary/2026-06-07.md" }),
+  }));
+  await renderFileTab("/api/diary/today", "Diary");
+  assert.ok(els["pane-body"].innerHTML.includes("<h1>Test Diary</h1>"),
+    "must render the returned HTML");
+  assert.equal(els["pane-header"].textContent, "Diary",
+    "pane-header must be set to the title");
+});
+
+await test("renderFileTab shows 404 empty state", async () => {
+  resetEls();
+  setFetch(async () => ({ status: 404, ok: false, json: async () => ({ ok: false }) }));
+  await renderFileTab("/api/diary/today", "Diary");
+  assert.ok(els["pane-body"].innerHTML.includes("No diary for today"),
+    "404 must show 'No diary for today yet.'");
+});
+
+await test("renderFileTab shows large file hint", async () => {
+  resetEls();
+  setFetch(async () => ({
+    status: 200, ok: true,
+    json: async () => ({ ok: true, html: null, large: true, path: "diary/2026-06-07.md" }),
+  }));
+  await renderFileTab("/api/diary/today", "Diary");
+  assert.ok(els["pane-body"].innerHTML.includes("large"),
+    "large:true must show size hint");
+});
+
+// ── stageTaskOp tests ────────────────────────────────────────────────────
+
+const stageTaskOp = sandbox.stageTaskOp;
+
+await test("stageTaskOp calls checkPendingProposal on success", async () => {
+  resetEls();
+  let called = false;
+  const orig = sandbox.checkPendingProposal;
+  sandbox.checkPendingProposal = () => { called = true; };
+  setFetch(async () => ({
+    status: 200, ok: true,
+    json: async () => ({ ok: true, staged: { id: "abc123", op: "complete" } }),
+  }));
+  await stageTaskOp("abc123", "complete", null);
+  assert.ok(called, "must invoke checkPendingProposal after success");
+  sandbox.checkPendingProposal = orig;
+});
+
+await test("stageTaskOp handles API error gracefully", async () => {
+  resetEls();
+  const orig = sandbox.addMsg;
+  let msgText = "";
+  sandbox.addMsg = (kind, text) => { msgText = text; };
+  setFetch(async () => ({
+    status: 400, ok: false,
+    json: async () => ({ ok: false, error: "no action with id" }),
+  }));
+  await stageTaskOp("badid", "complete", null);
+  assert.ok(msgText.includes("no action with id"),
+    "must report the API error via addMsg");
+  sandbox.addMsg = orig;
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

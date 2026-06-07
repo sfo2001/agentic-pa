@@ -29,7 +29,7 @@ def _has_node() -> bool:
 
 @pytest.mark.skipif(not _has_node(), reason="node not installed")
 def test_app_js_check_pending_proposal() -> None:
-    """Run the Node test harness; assert exit 0 and that all 5 cases passed."""
+    """Run the Node test harness; assert exit 0 and that all 14 cases passed."""
     assert JS_TEST.exists(), f"missing JS test harness: {JS_TEST}"
     proc = subprocess.run(
         ["node", str(JS_TEST)],
@@ -44,6 +44,6 @@ def test_app_js_check_pending_proposal() -> None:
     assert proc.returncode == 0, (
         f"node test_app_js.test.mjs failed (rc={proc.returncode}):\n{out}"
     )
-    assert summary.startswith("5 passed"), (
-        f"expected all 5 JS cases to pass; got: {summary!r}\n--- full output ---\n{out}"
+    assert summary.startswith("14 passed"), (
+        f"expected all 14 JS cases to pass; got: {summary!r}\n--- full output ---\n{out}"
     )

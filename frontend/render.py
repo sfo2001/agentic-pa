@@ -9,6 +9,9 @@ from __future__ import annotations
 import markdown as _markdown
 import nh3
 
+MAX_DIARY_RENDER_BYTES = 256 * 1024  # F4: a single day's accreted diary is KBs;
+# anything past 256 KiB is rendered as an empty-state hint, not inlined.
+
 # Tags that safe workspace markdown legitimately needs. We enumerate them
 # explicitly so nh3's whitelist stripping cannot accidentally drop structural
 # elements (tables, code blocks) while still rejecting <script>, <iframe>,

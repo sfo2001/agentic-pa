@@ -5,12 +5,114 @@ const input = document.getElementById("input");
 const badge = document.getElementById("inbox-badge");
 const upload = document.getElementById("upload");
 const paneBody = document.getElementById("pane-body");
+var BUCKET_ORDER = ["do_now", "overdue", "schedule", "resurfacing", "stale_important"];
+const BUCKET_LABEL = { do_now: "Do now", overdue: "Overdue", schedule: "Schedule",
+                       resurfacing: "Resurfacing", stale_important: "Stale & important" };
+let activeTab = "artifact";
+
+function humanizeTaskOp(action, op, value) {
+  const verb = value ? `${op} (${value})` : op;
+  return `${action.text || action.id}  \u2192  ${verb}`;
+}
+
+function setTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll(".pane-tab").forEach((b) =>
+    b.classList.toggle("is-active", b.dataset.tab === tab));
+  if (tab === "actions") renderActions();
+  else if (tab === "diary") renderFileTab("/api/diary/today", "Diary");
+  else if (tab === "brief") renderFileTab("/api/brief/today", "Brief");
+}
+
+document.querySelectorAll(".pane-tab").forEach((b) =>
+  b.addEventListener("click", () => setTab(b.dataset.tab)));
+
+async function renderActions() {
+  document.getElementById("pane-header").textContent = "Actions";
+  try {
+    const r = await fetch("/api/actions");
+    const j = await r.json();
+    if (!r.ok || !j.ok) { paneBody.textContent = "Could not load actions."; return; }
+    paneBody.replaceChildren();
+    let any = false;
+    for (const key of BUCKET_ORDER) {
+      const items = j.buckets[key] || [];
+      if (!items.length) continue;
+      any = true;
+      const sec = document.createElement("div");
+      sec.className = `bucket bucket-${key}`;
+      const h = document.createElement("h4"); h.textContent = BUCKET_LABEL[key];
+      sec.appendChild(h);
+      for (const a of items) sec.appendChild(_actionRow(a));
+      paneBody.appendChild(sec);
+    }
+    if (j.truncated) {
+      const note = document.createElement("p"); note.className = "pane-empty";
+      note.textContent = "Showing the first 500 actions.";
+      paneBody.appendChild(note);
+    }
+    if (!any) paneBody.innerHTML = '<p class="pane-empty">No open actions today.</p>';
+  } catch (_) { paneBody.textContent = "Network error loading actions."; }
+}
+
+function _actionRow(a) {
+  const row = document.createElement("div"); row.className = "action-row";
+  const label = document.createElement("span");
+  label.textContent = a.priority ? `(${a.priority}) ${a.text}` : a.text;
+  row.appendChild(label);
+  const ops = document.createElement("div"); ops.className = "ops";
+  if (a.id) {
+    ops.appendChild(_opButton(a, "\u2713", "complete", null));
+    ["A", "B", "C", "D"].forEach((p) => ops.appendChild(_opButton(a, p, "reprioritize", p)));
+  }
+  row.appendChild(ops);
+  return row;
+}
+
+function _opButton(a, text, op, value) {
+  const b = document.createElement("button"); b.type = "button"; b.textContent = text;
+  b.addEventListener("click", () => stageTaskOp(a.id, op, value));
+  return b;
+}
+
+async function renderFileTab(url, title) {
+  document.getElementById("pane-header").textContent = title;
+  try {
+    const r = await fetch(url);
+    if (r.status === 404) {
+      paneBody.innerHTML = `<p class="pane-empty">No ${title.toLowerCase()} for today yet.</p>`;
+      return;
+    }
+    const j = await r.json();
+    if (!r.ok || !j.ok) { paneBody.textContent = `Could not load ${title}.`; return; }
+    if (j.large) {
+      paneBody.innerHTML = `<p class="pane-empty">Today's ${title.toLowerCase()} is large — open it from chat.</p>`;
+      return;
+    }
+    paneBody.innerHTML = j.html || `<p class="pane-empty">Empty.</p>`;
+  } catch (_) { paneBody.textContent = `Network error loading ${title}.`; }
+}
+
+async function stageTaskOp(id, op, value) {
+  try {
+    const r = await fetch("/api/task_op", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, op, value }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) { addMsg("system", `Task op failed: ${j.error || r.status}`); return; }
+    checkPendingProposal();
+  } catch (_) { addMsg("system", "Task op network error."); }
+}
+
 // Linkify BACKTICK-delimited workspace paths so names with spaces/commas/unicode
 // (e.g. `documents/KI-Gefahren, Architekturen und MSA-LLM.md`) are clickable.
 // Group 1 = the path (without backticks). The agent writes paths in backticks.
 const PATH_RE = /`((?:inbox|meetings|topics|briefs|documents|archive)\/[^`]+?\.(?:md|markdown|txt))`/g;
 
 async function showArtifact(path) {
+  setTab("artifact");  // presenting a file activates the Artifact tab so the
+                       // tab highlight matches what the pane is showing.
   try {
     const r = await fetch("/api/file?path=" + encodeURIComponent(path));
     const j = await r.json();
@@ -82,7 +184,12 @@ function runTurn(text) {
   let bubble = null;
   let thinking = null;
   const es = new EventSource("/api/events");
-  const finish = () => { es.close(); setBusy(false); refreshInbox(); checkPendingProposal(); };
+  const finish = () => {
+    es.close(); setBusy(false); refreshInbox(); checkPendingProposal();
+    if (activeTab === "actions") renderActions();
+    else if (activeTab === "diary") renderFileTab("/api/diary/today", "Diary");
+    else if (activeTab === "brief") renderFileTab("/api/brief/today", "Brief");
+  };
 
   es.onopen = () => {
     fetch("/api/message", {
@@ -169,6 +276,7 @@ const sweepPanelHeader = document.getElementById("sweep-panel-header");
 const sweepDiary = document.getElementById("sweep-diary");
 const sweepActions = document.getElementById("sweep-actions");
 const sweepTopics = document.getElementById("sweep-topics");
+const sweepTaskOps = document.getElementById("sweep-task-ops");
 const sweepConfirm = document.getElementById("sweep-confirm");
 const sweepCancel = document.getElementById("sweep-cancel");
 // Wrap in an object so the reference itself is `const` (the slot is
@@ -195,6 +303,7 @@ function _clearSweepPanel() {
   sweepDiary.value = "";
   sweepActions.replaceChildren();
   sweepTopics.replaceChildren();
+  sweepTaskOps.replaceChildren();
 }
 
 function _renderSweepList(ul, items, kind) {
@@ -272,6 +381,7 @@ sweepConfirm.addEventListener("click", async () => {
     if (r.ok && j.ok) {
       const a = j.applied || {};
       addMsg("system", `Filed: diary=${a.diary ? 1 : 0}, +${a.actions || 0} actions, +${a.topics || 0} topic edits, +${a.meetings || 0} meetings.`);
+      if (activeTab === "actions") renderActions();
     } else {
       addMsg("system", `Confirm failed: ${j.error || r.status}`);
     }
@@ -317,6 +427,16 @@ async function checkPendingProposal() {
     sweepDiary.value = j.proposal.diary || "";
     _renderSweepList(sweepActions, j.proposal.actions || [], "action");
     _renderSweepList(sweepTopics, j.proposal.topics || [], "topic");
+    sweepTaskOps.replaceChildren();
+    (j.proposal.task_ops || []).forEach((t) => {
+      const li = document.createElement("li");
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = true; cb.dataset.kind = "task_op"; cb.dataset.id = t.id;
+      const label = document.createElement("label");
+      label.textContent = humanizeTaskOp({ text: `id:${t.id}` }, t.op, t.value);
+      li.appendChild(cb); li.appendChild(label);
+      sweepTaskOps.appendChild(li);
+    });
     sweepPanel.hidden = false;
   } catch (_) { /* transient; the next turn re-checks */ }
   finally { _proposalCheckInFlight = false; }

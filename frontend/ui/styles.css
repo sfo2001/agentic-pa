@@ -40,3 +40,15 @@ header h1 { font-size: 1rem; margin: 0; }
 #sweep-panel-footer button { font: inherit; padding: .3rem .8rem; border: 1px solid #ccc; border-radius: .4rem; cursor: pointer; }
 #sweep-confirm { background: #2563eb; color: #fff; border-color: #2563eb !important; }
 @media (max-width: 800px) { #panes { flex-direction: column; } #pane { border-left: none; border-top: 1px solid #ddd; } }
+#pane-tabs { display: flex; gap: .25rem; border-bottom: 1px solid #ddd; margin-bottom: .5rem; }
+.pane-tab { background: none; border: none; padding: .35rem .6rem; cursor: pointer; color: #555; border-bottom: 2px solid transparent; }
+.pane-tab.is-active { color: #000; border-bottom-color: #333; font-weight: 600; }
+.bucket { margin: .5rem 0; }
+.bucket > h4 { margin: .2rem 0; font-size: .85rem; text-transform: uppercase; letter-spacing: .03em; }
+.bucket-do_now > h4, .bucket-overdue > h4 { color: #b00020; }
+.bucket-schedule > h4 { color: #1565c0; }
+.bucket-resurfacing > h4 { color: #b58a00; }
+.bucket-stale_important > h4 { color: #666; }
+.action-row { display: flex; align-items: center; gap: .4rem; padding: .15rem 0; }
+.action-row .ops { margin-left: auto; display: flex; gap: .25rem; }
+.action-row .ops button { font-size: .8rem; padding: 0 .35rem; cursor: pointer; }
