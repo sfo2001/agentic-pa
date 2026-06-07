@@ -82,7 +82,7 @@ function runTurn(text) {
   let bubble = null;
   let thinking = null;
   const es = new EventSource("/api/events");
-  const finish = () => { es.close(); setBusy(false); refreshInbox(); };
+  const finish = () => { es.close(); setBusy(false); refreshInbox(); checkPendingProposal(); };
 
   es.onopen = () => {
     fetch("/api/message", {
@@ -165,6 +165,7 @@ undoBtn.addEventListener("click", async () => {
 // ── Sweep: review a structured proposal, then confirm to apply ────────────────
 const sweepBtn = document.getElementById("sweep");
 const sweepPanel = document.getElementById("sweep-panel");
+const sweepPanelHeader = document.getElementById("sweep-panel-header");
 const sweepDiary = document.getElementById("sweep-diary");
 const sweepActions = document.getElementById("sweep-actions");
 const sweepTopics = document.getElementById("sweep-topics");
@@ -207,6 +208,7 @@ async function runSweep() {
   if (composer.getAttribute("aria-disabled") === "true") return;
   setBusy(true);
   _clearSweepPanel();
+  sweepPanelHeader.textContent = "Sweep proposal";
   try {
     const r = await fetch("/api/sweep", { method: "POST" });
     const j = await r.json();
@@ -240,6 +242,28 @@ sweepCancel.addEventListener("click", () => {
 sweepConfirm.addEventListener("click", async () => {
   const ctx = sweepContext.current;
   if (!ctx) return;
+  // MCP proposal: the agent already staged inbox/_proposal.json; the confirm
+  // endpoint applies that file as-is (no edits/capture), so just POST it.
+  if (ctx.mcp) {
+    sweepPanel.hidden = true;
+    setBusy(true);
+    try {
+      const r = await fetch("/api/proposal/confirm", { method: "POST" });
+      const j = await r.json();
+      if (r.ok && j.ok) {
+        const a = j.applied || {};
+        addMsg("system", `Filed: diary=${a.diary ? 1 : 0}, +${a.actions || 0} actions, +${a.topics || 0} topic edits, +${a.meetings || 0} meetings.`);
+      } else {
+        addMsg("system", `Confirm failed: ${j.error || r.status}`);
+      }
+    } catch (_) {
+      addMsg("system", "Confirm network error.");
+    } finally {
+      setBusy(false);
+      clearSweepContext();
+    }
+    return;
+  }
   // Build the edited proposal from the panel's current state.
   const diary = sweepDiary.value;
   const actions = [];
@@ -283,4 +307,25 @@ sweepConfirm.addEventListener("click", async () => {
   }
 });
 
+// ── MCP proposal: the agent's present_propose stages inbox/_proposal.json.
+// Surface it in the same review panel (after each turn and on load) and confirm
+// via /api/proposal/confirm. Without this the staged proposal is invisible —
+// present_propose "completes" but nothing actionable appears in the UI.
+async function checkPendingProposal() {
+  try {
+    const r = await fetch("/api/proposal");
+    if (r.status === 404) return;            // nothing staged — the common case
+    const j = await r.json();
+    if (!r.ok || !j.ok || !j.proposal) return;
+    _clearSweepPanel();
+    setSweepContext({ proposal: j.proposal, mcp: true });
+    sweepPanelHeader.textContent = "Proposal to file";
+    sweepDiary.value = j.proposal.diary || "";
+    _renderSweepList(sweepActions, j.proposal.actions || [], "action");
+    _renderSweepList(sweepTopics, j.proposal.topics || [], "topic");
+    sweepPanel.hidden = false;
+  } catch (_) { /* transient; the next turn re-checks */ }
+}
+
 refreshInbox();
+checkPendingProposal();
