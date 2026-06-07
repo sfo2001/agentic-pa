@@ -3,7 +3,12 @@ name = "presenter-service"
 dynamic = ["version"]
 description = "MCP server: the present(path) UI signal and propose(proposal) ingest tool"
 requires-python = ">=3.10"
-dependencies = ["mcp>=1.2.0,<2", "frontend"]
+# `notes-frontend` is the local sibling package (it ships the `frontend`
+# import package). It MUST be named by its distribution name here, not the
+# bare import name `frontend` — `"frontend"` resolves to an unrelated PyPI
+# package whose import shadows ours and crashes the present MCP server on
+# startup (RuntimeError: Directory 'static/' does not exist).
+dependencies = ["mcp>=1.2.0,<2", "notes-frontend"]
 
 [project.scripts]
 present-server = "presenter.server:main"
