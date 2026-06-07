@@ -123,25 +123,47 @@ def _python_m_module(cmd: list[str]) -> str | None:
     return None
 
 
-def _module_importable(interpreter: str, module: str) -> bool:
-    """True iff *interpreter* can ``import <module>`` — validates a ``python -m``
-    MCP command will actually start (catches a broken/missing install early).
+def _run_import(
+    interpreter: str, module: str, cwd: str | None = None
+) -> tuple[int, str]:
+    """Spawn ``<interpreter> -c 'import <module>'``; return ``(returncode, stderr)``.
 
-    Rejects a malformed module name before spawning, so a tampered opencode.json
-    can't smuggle code into the ``-c`` string (fail closed)."""
+    Single source of truth for the preflight subprocess shape. Both
+    :func:`_module_importable` (a bool hard-gate for the load-bearing notes
+    server) and :func:`_probe_module_import` (a soft probe that captures the
+    failure reason for the optional present server) delegate here, so any
+    future tightening (e.g. ``cwd`` propagation, switching to ``text=True``)
+    lands in one place.
+
+    Rejects a malformed module name before spawning, so a tampered
+    opencode.json can't smuggle code into the ``-c`` string (fail closed).
+    Returns ``(1, f"invalid module name: {module!r}")`` on regex-reject so the
+    caller can surface the reason verbatim."""
     # fullmatch (NOT re.match) is load-bearing: match() anchors only the start, so
     # ``$`` would accept "agenda.server\nimport os" — fullmatch rejects any
     # trailing payload. Do not weaken this to match().
     if not _MODULE_NAME_RE.fullmatch(module):
-        return False
+        return 1, f"invalid module name: {module!r}"
     try:
-        return subprocess.run(
+        r = subprocess.run(
             [interpreter, "-c", f"import {module}"],
-            capture_output=True, timeout=10,
-        ).returncode == 0
-    except (OSError, subprocess.SubprocessError):
+            capture_output=True, timeout=10, cwd=cwd,
+        )
+        return r.returncode, r.stderr.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError) as e:
         # SubprocessError covers TimeoutExpired (a hung import) — fail closed.
-        return False
+        return 1, str(e)
+
+
+def _module_importable(interpreter: str, module: str) -> bool:
+    """True iff *interpreter* can ``import <module>`` — validates a ``python -m``
+    MCP command will actually start (catches a broken/missing install early).
+
+    Thin wrapper over :func:`_run_import`: a non-zero return OR an empty stderr
+    with a non-zero return is the only signal that matters here. Callers that
+    need the *reason* (e.g. the present-MCP soft probe's stderr-in-warning)
+    use :func:`_probe_module_import` instead."""
+    return _run_import(interpreter, module, cwd=None)[0] == 0
 
 
 def _probe_module_import(
@@ -156,18 +178,9 @@ def _probe_module_import(
     whose name collides with an installed PyPI distribution resolves to the
     other one when the repo dir is not on ``sys.path[0]``. Probing from the
     same cwd is what makes a startup crash reproducible at launch instead of
-    only inside OpenCode's buried log. Same fail-closed regex guard as
-    ``_module_importable`` so a tampered config can't smuggle code via ``-c``."""
-    if not _MODULE_NAME_RE.fullmatch(module):
-        return False, f"invalid module name: {module!r}"
-    try:
-        r = subprocess.run(
-            [interpreter, "-c", f"import {module}"],
-            capture_output=True, timeout=10, cwd=cwd,
-        )
-        return r.returncode == 0, r.stderr.decode("utf-8", "replace")
-    except (OSError, subprocess.SubprocessError) as e:
-        return False, str(e)
+    only inside OpenCode's buried log. Thin wrapper over :func:`_run_import`."""
+    returncode, stderr = _run_import(interpreter, module, cwd=cwd)
+    return returncode == 0, stderr
 
 
 def _wait_health(url: str, timeout: float = 30.0, password: str | None = None) -> bool:
