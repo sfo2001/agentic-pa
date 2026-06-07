@@ -183,9 +183,14 @@ function runTurn(text) {
   addMsg("user", text);
   let bubble = null;
   let thinking = null;
+  let _finishing = false;
+  let _briefGenerated = false;
   const es = new EventSource("/api/events");
   const finish = () => {
+    if (_finishing) return;
+    _finishing = true;
     es.close(); setBusy(false); refreshInbox(); checkPendingProposal();
+    if (_briefGenerated) { setTab("brief"); return; }
     if (activeTab === "actions") renderActions();
     else if (activeTab === "diary") renderFileTab("/api/diary/today", "Diary");
     else if (activeTab === "brief") renderFileTab("/api/brief/today", "Brief");
@@ -214,6 +219,7 @@ function runTurn(text) {
       chat.scrollTop = chat.scrollHeight;
     } else if (evt.type === "tool_call") {
       addTool(evt.name, evt.status);
+      if (evt.name === "present_present_brief") _briefGenerated = true;
     } else if (evt.type === "present") {
       showArtifact(evt.path);
     } else if (evt.type === "error") {
