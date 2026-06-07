@@ -125,22 +125,46 @@ def _cap_field(value: str, limit: int, name: str, errors: list[str]) -> str:
 
 
 @mcp.tool()
-def propose(proposal: str) -> dict:
+def propose(
+    diary: str = "",
+    actions: list[str] | None = None,
+    topics: list[dict] | None = None,
+    meetings: list[dict] | None = None,
+) -> dict:
     """Submit a structured Ingest proposal for the user to confirm.
 
     The agent MUST use this tool for ALL ingest operations — never write
     proposal content (actions, topics, meetings, diary) directly with file
-    tools. The frontend will show the proposal to the user; on confirm it
-    applies the proposal deterministically.
+    tools. The frontend shows the proposal to the user; on confirm it applies
+    it deterministically. Pass each field as a native argument — do NOT wrap
+    them in a JSON string.
 
     Parameters:
-        proposal: A JSON string matching the Ingest schema:
-            {
-              "diary": "narrative summary",
-              "actions": ["(B) text +topic due:… t:… upd:…", ...],
-              "topics": [{"slug": "...", "section": "## Current state", "text": "..."}],
-              "meetings": [{"slug": "...", "title": "...", "topics": [...], ...}]
-            }
+        diary:    Narrative summary of what the user told you. Required
+                  non-empty when any actions/topics/meetings are present.
+        actions:  todo.txt lines, e.g.
+                  "(B) Ask boss's assistant for org chart +presentation t:2026-06-09 upd:2026-06-07".
+        topics:   [{"slug": "...", "section": "## Current state", "text": "..."}, ...].
+                  Every +tag used in an action needs a matching topic entry here.
+        meetings: [{"slug": "...", "title": "...", "topics": [...], "summary": "...",
+                  "decisions": "...", "actions": "...", "raw": "..."}, ...] — ONLY
+                  when the user recounted a real gathering.
+    """
+    return _propose_payload(json.dumps({
+        "diary": diary,
+        "actions": actions or [],
+        "topics": topics or [],
+        "meetings": meetings or [],
+    }))
+
+
+def _propose_payload(proposal: str) -> dict:
+    """Validate + stage an Ingest proposal supplied as a JSON string.
+
+    Internal seam: the ``propose`` MCP tool assembles this JSON from its native
+    arguments and delegates here. Kept string-based so the hardened validation
+    (size cap, JSON shape, field caps, date sanity) lives in one place and
+    stays directly unit-testable.
     """
     # Total size cap (DoS hardening) — checked on the raw string so a
     # pathological payload never reaches json.loads.

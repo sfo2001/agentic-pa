@@ -24,7 +24,7 @@ class TestPropose:
         monkeypatch.setenv("NOTES_ROOT", str(tmp_path))
 
     def test_valid_json(self):
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "User shared two tasks today.",
             "actions": ["(A) Prepare org chart +presentation due:2026-06-09 upd:2026-06-05"],
             "topics": [{"slug": "presentation", "section": "## Current state", "text": "Org chart needed for Tuesday"}],
@@ -35,10 +35,41 @@ class TestPropose:
         assert result["action_count"] == 1
         assert result["topic_count"] == 1
 
+    def test_propose_native_params(self):
+        """The MCP tool takes native typed args (no JSON-string wrapping) and
+        delegates to the validation core."""
+        result = server.propose(
+            diary="User shared two tasks today.",
+            actions=["(A) Prepare org chart +presentation due:2026-06-09 upd:2026-06-05"],
+            topics=[{"slug": "presentation", "section": "## Current state",
+                     "text": "Org chart needed for Tuesday"}],
+        )
+        assert result["ok"] is True
+        assert result["action_count"] == 1
+        assert result["topic_count"] == 1
+
+    def test_propose_native_defaults_empty(self):
+        """Omitted list args default to empty; a diary-only call is a valid
+        (empty) proposal."""
+        result = server.propose(diary="just a note")
+        assert result["ok"] is True
+        assert result["action_count"] == 0
+        assert result["topic_count"] == 0
+        assert result["meeting_count"] == 0
+
+    def test_propose_native_params_still_validated(self):
+        """Validation (tickler-after-due) fires through the native-param path."""
+        result = server.propose(
+            diary="Org chart needed for Tuesday's presentation.",
+            actions=["(A) Prepare org chart due:2026-06-09 t:2026-06-12 upd:2026-06-06"],
+        )
+        assert result["ok"] is False
+        assert "after due:2026-06-09" in result["error"]
+
     def test_rejects_tickler_after_due(self):
         """A reminder (t:) set after the deadline (due:) is rejected — the exact
         2026-06-05 mis-file class of bug (reminder fires after the event)."""
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Org chart needed for Tuesday's presentation.",
             "actions": ["(A) Prepare org chart due:2026-06-09 t:2026-06-12 upd:2026-06-06"],
             "topics": [],
@@ -48,23 +79,23 @@ class TestPropose:
         assert "after due:2026-06-09" in result["error"]
 
     def test_invalid_json(self):
-        result = server.propose("not json")
+        result = server._propose_payload("not json")
         assert result["ok"] is False
         assert "invalid JSON" in result["error"]
 
     def test_not_a_dict(self):
-        result = server.propose("[1, 2, 3]")
+        result = server._propose_payload("[1, 2, 3]")
         assert result["ok"] is False
         assert "JSON object" in result["error"]
 
     def test_missing_required_keys(self):
-        result = server.propose('{"diary": "x"}')
+        result = server._propose_payload('{"diary": "x"}')
         assert result["ok"] is False
         for k in ("actions", "topics", "meetings"):
             assert k in result["error"]
 
     def test_empty_diary_with_content(self):
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "",
             "actions": ["(B) something +test upd:2026-06-05"],
             "topics": [],
@@ -74,7 +105,7 @@ class TestPropose:
         assert "diary" in result["error"]
 
     def test_tag_without_topic(self):
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Test",
             "actions": ["(B) task +missing-tag upd:2026-06-05"],
             "topics": [],
@@ -84,7 +115,7 @@ class TestPropose:
         assert "missing-tag" in result["error"]
 
     def test_invalid_topic_slug(self):
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Test",
             "actions": [],
             "topics": [{"slug": "has a space", "section": "## Current state", "text": "bad slug"}],
@@ -94,7 +125,7 @@ class TestPropose:
         assert result["topic_count"] == 0
 
     def test_invalid_topic_section(self):
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Test",
             "actions": [],
             "topics": [{"slug": "ok", "section": "## Unknown section", "text": "text"}],
@@ -105,7 +136,7 @@ class TestPropose:
 
     def test_string_instead_of_list(self):
         """Type-confusion guard: a string value for actions/topics/meetings is rejected."""
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Test",
             "actions": "not a list",
             "topics": 42,
@@ -118,7 +149,7 @@ class TestPropose:
 
     def test_diary_only_no_actions(self):
         """A proposal with only diary text (no actions/topics/meetings) is valid."""
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Just a quick braindump.",
             "actions": [],
             "topics": [],
@@ -130,7 +161,7 @@ class TestPropose:
 
     def test_invalid_meeting_slug(self):
         """An invalid-slug meeting entry is silently dropped like an invalid topic slug."""
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Test",
             "actions": [],
             "topics": [],
@@ -145,7 +176,7 @@ class TestPropose:
         from pathlib import Path
 
         root = Path(os.environ["NOTES_ROOT"])
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Written test.",
             "actions": ["(A) test task +test-topic due:2026-06-10 upd:2026-06-05"],
             "topics": [{"slug": "test-topic", "section": "## Current state", "text": "test"}],
@@ -173,7 +204,7 @@ class TestPropose:
         from pathlib import Path
 
         root = Path(os.environ["NOTES_ROOT"])
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Discussed the atlas migration.",
             "actions": [],
             "topics": [],
@@ -209,7 +240,7 @@ class TestPropose:
         import json
 
         actions = [f"(B) action {i} +t upd:2026-06-05" for i in range(51)]
-        result = server.propose(json.dumps({
+        result = server._propose_payload(json.dumps({
             "diary": "Test",
             "actions": actions,
             "topics": [{"slug": "t", "section": "## Current state", "text": "t"}],
@@ -222,7 +253,7 @@ class TestPropose:
         import json
 
         topics = [{"slug": f"t{i}", "section": "## Current state", "text": "x"} for i in range(21)]
-        result = server.propose(json.dumps({
+        result = server._propose_payload(json.dumps({
             "diary": "Test",
             "actions": [],
             "topics": topics,
@@ -235,7 +266,7 @@ class TestPropose:
         import json
 
         meetings = [{"slug": f"m{i}", "title": "m"} for i in range(11)]
-        result = server.propose(json.dumps({
+        result = server._propose_payload(json.dumps({
             "diary": "Test",
             "actions": [],
             "topics": [],
@@ -249,7 +280,7 @@ class TestPropose:
         import json
 
         long_action = "(B) " + ("x" * 250) + " +t upd:2026-06-05"
-        result = server.propose(json.dumps({
+        result = server._propose_payload(json.dumps({
             "diary": "Test",
             "actions": [long_action],
             "topics": [{"slug": "t", "section": "## Current state", "text": "t"}],
@@ -262,7 +293,7 @@ class TestPropose:
     def test_oversized_topic_text_rejected(self):
         import json
 
-        result = server.propose(json.dumps({
+        result = server._propose_payload(json.dumps({
             "diary": "Test",
             "actions": [],
             "topics": [{"slug": "t", "section": "## Current state", "text": "x" * 8001}],
@@ -275,7 +306,7 @@ class TestPropose:
     def test_oversized_diary_rejected(self):
         import json
 
-        result = server.propose(json.dumps({
+        result = server._propose_payload(json.dumps({
             "diary": "x" * 8001,
             "actions": [],
             "topics": [],
@@ -300,7 +331,7 @@ class TestPropose:
             "meetings": [],
         })
         assert len(payload.encode("utf-8")) > 1 * 1024 * 1024
-        result = server.propose(payload)
+        result = server._propose_payload(payload)
         assert result["ok"] is False
         assert "exceeds 1048576" in result["error"]
 
@@ -313,7 +344,7 @@ class TestPropose:
         would make the propose path brittle. Only valid-slug tags
         (matching SLUG_PATTERN) are checked against topic_slugs.
         """
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Test",
             "actions": ["(B) contact @colleague +t upd:2026-06-05"],
             "topics": [{"slug": "t", "section": "## Current state", "text": "t"}],
@@ -332,7 +363,7 @@ class TestPropose:
         an orphan topic note is still useful content even if no action
         currently references it. See audit finding 2.5.
         """
-        result = server.propose("""{
+        result = server._propose_payload("""{
             "diary": "Test",
             "actions": [],
             "topics": [{"slug": "orphan", "section": "## Current state", "text": "x"}],
@@ -355,7 +386,7 @@ class TestPropose:
         """
         from pathlib import Path
 
-        server.propose("""{
+        server._propose_payload("""{
             "diary": "Atomic.",
             "actions": [],
             "topics": [],
@@ -463,7 +494,7 @@ class TestTask:
         assert r["ok"] is False and "op" in r["error"]
 
     def test_merges_with_existing_proposal(self):
-        server.propose('{"diary":"d","actions":[],"topics":[],"meetings":[]}')
+        server._propose_payload('{"diary":"d","actions":[],"topics":[],"meetings":[]}')
         server.present_task("bbb222", "retickle", "2026-06-08")
         s = self._staged()
         assert s["diary"] == "d"  # preserved
@@ -482,11 +513,11 @@ class TestTask:
         assert r["ok"] is False and "YYYY-MM-DD" in r["error"]
 
     def test_stages_diary_only_no_warnings(self):
-        r = server.propose('{"diary":"x","actions":[],"topics":[],"meetings":[]}')
+        r = server._propose_payload('{"diary":"x","actions":[],"topics":[],"meetings":[]}')
         assert r["warnings"] is None
 
     def test_warns_on_dropped_topic(self):
-        r = server.propose("""{
+        r = server._propose_payload("""{
             "diary": "Test",
             "actions": [],
             "topics": [{"slug": "has space", "section": "## Current state", "text": "bad"}],
