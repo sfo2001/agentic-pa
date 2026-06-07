@@ -11,11 +11,12 @@ from typing import Annotated
 
 import httpx
 from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from agenda import engine
+from frontend import pane as render_pane
 from frontend import proposal, sweep, versioning, wiki
 from frontend.opencode_client import OpenCodeClient
 from frontend.proxy import NotesProxy, SessionLost
@@ -309,6 +310,24 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
             return {"ok": True, "html": None, "large": True, "path": f"briefs/{name}"}
         text = path.read_text(encoding="utf-8", errors="replace")
         return {"ok": True, "html": render_markdown(text), "large": False, "path": f"briefs/{name}"}
+
+    @app.get("/api/pane/{tab}")
+    async def pane_tab(tab: str):
+        if tab == "actions":
+            html = render_pane.actions(notes_root)
+        elif tab == "diary":
+            html = render_pane.diary(notes_root)
+        elif tab == "brief":
+            html = render_pane.brief(notes_root)
+        else:
+            html = render_pane.artifact()
+        return HTMLResponse(html)
+
+    @app.post("/api/pane/actions/task-op")
+    async def pane_task_op(body: _TaskOpBody):
+        async with git_lock:
+            proposal.stage_task_op(notes_root, body.id, body.op, body.value)
+        return HTMLResponse(render_pane.actions(notes_root))
 
     @app.post("/api/task_op")
     async def task_op(body: _TaskOpBody):

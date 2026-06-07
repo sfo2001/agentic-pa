@@ -1061,3 +1061,89 @@ async def test_brief_today_over_cap_returns_empty_state(tmp_path):
         r = await c.get("/api/brief/today")
     assert r.status_code == 200
     assert r.json()["html"] is None and r.json()["large"] is True
+
+
+# ── SSR island endpoints: GET /api/pane/{tab} ─────────────────────────────────
+
+
+async def test_pane_actions_returns_html_buckets(tmp_path):
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(A) Do now task +x due:2026-06-09 upd:2026-06-04 id:aaa111\n"
+        "(B) Schedule task +x upd:2026-06-04 id:bbb222\n", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/pane/actions")
+    assert r.status_code == 200
+    html = r.text
+    assert "Do Now" in html
+    assert "Schedule" in html
+    assert "data-op=\"complete\"" in html or "data-op=&#34;complete&#34;" in html
+    assert "aaa111" in html
+
+
+async def test_pane_actions_empty(tmp_path):
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/pane/actions")
+    assert r.status_code == 200
+    assert "No open actions" in r.text
+
+
+async def test_pane_diary_returns_markdown(tmp_path):
+    (tmp_path / "diary").mkdir()
+    (tmp_path / "diary" / f"{datetime.date.today():%Y-%m-%d}.md").write_text(
+        "# My diary\n\nSome content.", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/pane/diary")
+    assert r.status_code == 200
+    assert "<h1>" in r.text
+    assert "My diary" in r.text
+
+
+async def test_pane_diary_empty(tmp_path):
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/pane/diary")
+    assert r.status_code == 200
+    assert "No diary today" in r.text
+
+
+async def test_pane_brief_returns_markdown(tmp_path):
+    (tmp_path / "briefs").mkdir()
+    (tmp_path / "briefs" / f"{datetime.date.today():%Y-%m-%d}-daily.md").write_text(
+        "# Daily Brief\n\nItem.", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/pane/brief")
+    assert r.status_code == 200
+    assert "<h1>" in r.text
+    assert "Daily Brief" in r.text
+
+
+async def test_pane_brief_empty_hints_chat(tmp_path):
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/pane/brief")
+    assert r.status_code == 200
+    assert "Ask in chat" in r.text and "Daily Brief" in r.text
+
+
+async def test_pane_artifact_returns_empty(tmp_path):
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.get("/api/pane/unknown")
+    assert r.status_code == 200
+    assert "Nothing presented yet" in r.text
+
+
+async def test_pane_task_op_stages_and_refreshes(tmp_path):
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(B) Task to complete +x upd:2026-06-04 id:abc999\n", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/pane/actions/task-op",
+                         json={"id": "abc999", "op": "complete", "value": None})
+    assert r.status_code == 200
+    assert (tmp_path / "inbox" / "_proposal.json").exists()
+    assert "Task to complete" in r.text or "No open actions" in r.text
