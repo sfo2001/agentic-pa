@@ -11,7 +11,17 @@ from __future__ import annotations
 
 import datetime
 import json
+import threading
 from pathlib import Path
+
+# Strictly-monotonic guard for make_capture_stamp: datetime.now()'s resolution is
+# coarse on some platforms (Windows' system clock can repeat the same microsecond
+# across two tight calls), which would collide two Sweep captures onto the same
+# inbox/<stamp>.md filename — the second silently overwriting the first. Tracking
+# the last stamp and advancing by ≥1µs guarantees uniqueness regardless of clock
+# granularity, keeps the stamps sortable, and preserves the 6-digit %f format.
+_stamp_lock = threading.Lock()
+_last_stamp_dt: datetime.datetime | None = None
 
 
 def _default_state_path(notes_root: Path | str, git_dir: Path | str | None) -> Path:
@@ -107,8 +117,19 @@ def make_capture_stamp() -> str:
     collisions when a user mashes the Sweep button; the prefix is the
     same date+time grid the inbox already uses, so a 2026-06-04-1430
     capture sorts next to its 1430 siblings in `ls`.
+
+    The stamp is strictly monotonic per process: if the clock has not advanced
+    since the previous call (coarse timers on Windows can repeat a microsecond),
+    we advance by 1µs so two captures never share a filename. timedelta carries
+    into seconds/minutes as needed and `%f` stays six digits.
     """
-    return datetime.datetime.now().strftime("%Y-%m-%d-%H%M%S-%f")
+    global _last_stamp_dt
+    with _stamp_lock:
+        now = datetime.datetime.now()
+        if _last_stamp_dt is not None and now <= _last_stamp_dt:
+            now = _last_stamp_dt + datetime.timedelta(microseconds=1)
+        _last_stamp_dt = now
+    return now.strftime("%Y-%m-%d-%H%M%S-%f")
 
 
 def write_capture(notes_root: Path | str, text: str, *, stamp: str) -> Path:
