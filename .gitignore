@@ -31,3 +31,9 @@ inbox/
 # Local audit outputs — durable offline review but not project documentation.
 findings.md
 pr-audit-findings.md
+# Per-session algorithm work-tracking artifacts. The durable record lives
+# in docs/adr/ and docs/decisions/; the session trees under WORK/ are
+# machine-local scratch and conversation.txt is the per-turn transcript
+# of the live agent (operation log).
+WORK/
+conversation.txt
