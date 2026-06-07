@@ -183,6 +183,35 @@ def _probe_module_import(
     return returncode == 0, stderr
 
 
+def _soft_probe_present(install_root: Path | str, workspace: str) -> str | None:
+    """Probe the optional present MCP at launch; return a one-line warn reason
+    on failure, or None when nothing to warn about.
+
+    Pulls the present MCP command from ``<install_root>/opencode.json``,
+    extracts the ``-m`` module, and runs the same import probe OpenCode will
+    at startup, from ``cwd=workspace`` (the dimension that hid the
+    ``frontend`` / ``notes-frontend`` import-shadow crash). Extracted from
+    ``main()`` so the integration is unit-testable without spinning up the
+    launcher.
+
+    Returns the *last non-blank line* of the import's stderr (the Python
+    traceback's cause line) so the warn message in ``main()`` can be a single
+    line, not a multi-line dump. Returns the literal ``"<no output>"`` when
+    the probe produced no stderr at all (e.g. SIGKILL)."""
+    present_cmd = present_mcp_command(install_root)
+    present_module = _python_m_module(present_cmd) if present_cmd else None
+    if not present_module:
+        return None
+    ok, err = _probe_module_import(present_cmd[0], present_module, cwd=workspace)
+    if ok:
+        return None
+    last = next(
+        (ln for ln in reversed(err.strip().splitlines()) if ln.strip()),
+        "<no output>",
+    )
+    return f"Reason: {last}"
+
+
 def _wait_health(url: str, timeout: float = 30.0, password: str | None = None) -> bool:
     headers = {}
     if password:
@@ -389,20 +418,14 @@ def main() -> int:
     # Soft probe of the optional present MCP (see the not-hard-gated note above),
     # spawned from cwd=workspace exactly as OpenCode will. Warn loudly on failure
     # — the agent stays up but cannot file proposals.
-    present_cmd = present_mcp_command(install_root)
-    present_module = _python_m_module(present_cmd) if present_cmd else None
-    if present_module:
-        ok, err = _probe_module_import(present_cmd[0], present_module, cwd=str(workspace))
-        if not ok:
-            reason = next((ln for ln in reversed(err.strip().splitlines()) if ln.strip()),
-                          "<no output>")
-            print(
-                f"WARNING: the 'present' MCP server ('{present_module}') fails to start "
-                f"from the notes workspace — the presentation pane and the propose/file "
-                f"tools will be UNAVAILABLE, so the agent cannot file proposals. "
-                f"Reason: {reason}",
-                file=sys.stderr,
-            )
+    warn_reason = _soft_probe_present(install_root, str(workspace))
+    if warn_reason is not None:
+        print(
+            "WARNING: the 'present' MCP server fails to start from the notes "
+            "workspace — the presentation pane and the propose/file tools will "
+            f"be UNAVAILABLE, so the agent cannot file proposals. {warn_reason}",
+            file=sys.stderr,
+        )
 
     # A per-run random password authenticates the localhost OpenCode server so
     # other local processes/users cannot drive the sandboxed agent (design §8).
