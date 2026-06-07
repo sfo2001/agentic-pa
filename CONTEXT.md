@@ -97,8 +97,9 @@ _Avoid_: "journal", "daylog", "log" (the per-turn git history is the operation l
 **Sweep**:
 The act of turning a span of the live conversation **transcript** into filed
 structure. The frontend snapshots transcript-since-watermark into an **Inbox**
-capture file; the existing **Ingest** segmentation then produces a **Diary** entry
-plus **Actions**/**Topic** updates (and a **Meeting** only if a real gathering was
+capture file and prompts the agent to **Ingest** it via `present_propose`; the
+agent reads the capture and calls the tool to produce a **Diary** entry plus
+**Actions**/**Topic** updates (and a **Meeting** only if a real gathering was
 recounted). Sourced from the transcript — distinct from Ingest of a user-dropped
 Inbox file, but the *same* segmentation engine.
 _Avoid_: "capture" (capture is automatic in OpenCode; the Sweep is the structuring
@@ -158,8 +159,9 @@ _Avoid_: "metadata" (too broad).
 - A **Grounding Source** (future) would be external and read via an MCP adapter,
   distinct from both of the above.
 - A **Sweep** snapshots the conversation **transcript** into an **Inbox** capture and
-  runs **Ingest** over it, producing a **Diary** entry plus **Actions** and **Topic**
-  updates (a **Meeting** only if a real gathering was recounted).
+  prompts the agent to **Ingest** it via `present_propose`; the agent reads the
+  capture and calls the tool to produce a **Diary** entry plus **Actions** and
+  **Topic** updates (a **Meeting** only if a real gathering was recounted).
 - **Ingest** (any source) is **propose-confirm**: the agent emits a proposal, the
   frontend applies it deterministically. The frontend is therefore the writer of
   confirmed Ground-Truth content as well as the **Index**. The agent calls

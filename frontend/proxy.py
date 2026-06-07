@@ -13,7 +13,6 @@ event and return — it will NOT open a second upstream stream.
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 
 import httpx
@@ -173,25 +172,6 @@ class NotesProxy:
         if self._session_id is None:
             return []
         return await self._oc.messages(self._session_id)
-
-    async def propose_ingest(self, capture_rel: str) -> str:
-        """Ask the agent to Ingest *capture_rel* in propose mode and return its
-        final text (the structured proposal). Raises SessionLost on upstream
-        HTTP failure. The caller is responsible for handing the returned text
-        to ``proposal.parse_proposal`` and turning any ``ProposalError`` into
-        the right HTTP status (502 "bad proposal", not 503 "session lost").
-        """
-        try:
-            sid = await self.ensure_session()
-            await self._oc.send_message(
-                sid,
-                f"Ingest the file {capture_rel} in PROPOSE mode: emit ONLY the "
-                f"structured JSON proposal (diary, actions, topics, meetings). "
-                f"Do not write any files.",
-            )
-            return await self._oc.final_text(sid)
-        except (httpx.HTTPError, RuntimeError, json.JSONDecodeError) as exc:
-            raise SessionLost("session unavailable") from exc
 
     async def aclose(self) -> None:
         """Close the underlying OpenCode client."""

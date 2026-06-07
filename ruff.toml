@@ -8,8 +8,11 @@ target-version = "py310"
 # is covered by structural tests (see tests/launcher/test_preflight_env.py).
 #
 # .mjs — JS test harness for frontend/ui/app.js (tests/frontend/test_app_js.*);
-# ruff has no JS grammar and the file is gated by `node --check` + the
-# pytest wrapper that subprocess-runs it, not by ruff.
+# ruff's default include skips .js / .mjs when scanning a directory tree,
+# but `ruff check tests/frontend/test_app_js.test.mjs` is a *direct* path
+# argument and would otherwise report 1000+ parse errors. The harness is
+# gated by `node --check` + the pytest wrapper that subprocess-runs it,
+# not by ruff.
 extend-exclude = ["*.cmd", "*.sh", "*.ps1", "*.mjs"]
 
 [lint]

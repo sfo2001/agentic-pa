@@ -221,25 +221,21 @@ function _renderSweepList(ul, items, kind) {
 async function runSweep() {
   if (composer.getAttribute("aria-disabled") === "true") return;
   setBusy(true);
-  _clearSweepPanel();
   try {
-    const r = await fetch("/api/sweep", { method: "POST" });
+    const r = await fetch("/api/sweep/prep", { method: "POST" });
     const j = await r.json();
     if (!r.ok || !j.ok) {
-      addMsg("system", `Sweep failed: ${j.error || r.status}`);
+      addMsg("system", `Sweep prep failed: ${j.error || r.status}`);
       return;
     }
-    if (!j.proposal) {
+    if (!j.capture) {
       addMsg("system", "Nothing new to sweep.");
       return;
     }
-    setSweepContext({ proposal: j.proposal, capture: j.capture, session: j.session, last_id: j.last_id });
-    sweepDiary.value = j.proposal.diary || "";
-    _renderSweepList(sweepActions, j.proposal.actions || [], "action");
-    _renderSweepList(sweepTopics, j.proposal.topics || [], "topic");
-    sweepPanel.hidden = false;
+    setSweepContext({ capture: j.capture, session: j.session, last_id: j.last_id });
+    runTurn(`Ingest the file inbox/${j.capture} in PROPOSE mode via present_propose`);
   } catch (_) {
-    addMsg("system", "Sweep network error.");
+    addMsg("system", "Sweep prep network error.");
   } finally {
     setBusy(false);
   }
@@ -255,65 +251,32 @@ sweepCancel.addEventListener("click", () => {
 sweepConfirm.addEventListener("click", async () => {
   const ctx = sweepContext.current;
   if (!ctx) return;
-  // MCP proposal: the agent already staged inbox/_proposal.json; the confirm
-  // endpoint applies that file as-is (no edits/capture), so just POST it.
-  if (ctx.mcp) {
-    sweepPanel.hidden = true;
-    setBusy(true);
-    try {
-      const r = await fetch("/api/proposal/confirm", { method: "POST" });
-      const j = await r.json();
-      if (r.ok && j.ok) {
-        const a = j.applied || {};
-        addMsg("system", `Filed: diary=${a.diary ? 1 : 0}, +${a.actions || 0} actions, +${a.topics || 0} topic edits, +${a.meetings || 0} meetings.`);
-      } else {
-        addMsg("system", `Confirm failed: ${j.error || r.status}`);
-      }
-    } catch (_) {
-      addMsg("system", "Confirm network error.");
-    } finally {
-      setBusy(false);
-      clearSweepContext();
-    }
-    return;
-  }
-  // Build the edited proposal from the panel's current state.
-  const diary = sweepDiary.value;
-  const actions = [];
-  sweepActions.querySelectorAll("li").forEach((li) => {
-    const cb = li.querySelector("input");
-    if (cb.checked) actions.push(li.querySelector("label").textContent);
-  });
-  const topics = [];
-  sweepTopics.querySelectorAll("li").forEach((li) => {
-    const cb = li.querySelector("input");
-    if (!cb.checked) return;
-    const orig = ctx.proposal.topics[Number(cb.dataset.idx)];
-    topics.push(orig);
-  });
-  const edited = {
-    proposal: { diary, actions, topics, meetings: ctx.proposal.meetings || [] },
-    capture: ctx.capture,
-    session: ctx.session,
-    last_id: ctx.last_id,
-  };
   sweepPanel.hidden = true;
   setBusy(true);
   try {
-    const r = await fetch("/api/sweep/confirm", {
+    const body = {};
+    if (ctx.session && ctx.last_id) {
+      body.session = ctx.session;
+      body.last_id = ctx.last_id;
+    }
+    if (ctx.capture) {
+      body.capture = ctx.capture;
+    }
+    const hasBody = Object.keys(body).length > 0;
+    const r = await fetch("/api/proposal/confirm", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(edited),
+      headers: hasBody ? { "content-type": "application/json" } : {},
+      body: hasBody ? JSON.stringify(body) : undefined,
     });
     const j = await r.json();
     if (r.ok && j.ok) {
       const a = j.applied || {};
-      addMsg("system", `Sweep applied: diary=${a.diary ? 1 : 0}, +${a.actions || 0} actions, +${a.topics || 0} topic edits, +${a.meetings || 0} meetings.`);
+      addMsg("system", `Filed: diary=${a.diary ? 1 : 0}, +${a.actions || 0} actions, +${a.topics || 0} topic edits, +${a.meetings || 0} meetings.`);
     } else {
-      addMsg("system", `Sweep confirm failed: ${j.error || r.status}`);
+      addMsg("system", `Confirm failed: ${j.error || r.status}`);
     }
   } catch (_) {
-    addMsg("system", "Sweep confirm network error.");
+    addMsg("system", "Confirm network error.");
   } finally {
     setBusy(false);
     clearSweepContext();
@@ -342,7 +305,15 @@ async function checkPendingProposal() {
     const j = await r.json();
     if (!r.ok || !j.ok || !j.proposal) return;
     _clearSweepPanel();
-    setSweepContext({ proposal: j.proposal, mcp: true });
+    // Preserve sweep metadata (capture, session, last_id) if set by runSweep.
+    const existing = sweepContext.current || {};
+    setSweepContext({
+      proposal: j.proposal,
+      capture: existing.capture || null,
+      session: existing.session || null,
+      last_id: existing.last_id || null,
+    });
+    sweepPanelHeader.textContent = "Proposal to file";
     sweepDiary.value = j.proposal.diary || "";
     _renderSweepList(sweepActions, j.proposal.actions || [], "action");
     _renderSweepList(sweepTopics, j.proposal.topics || [], "topic");

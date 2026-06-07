@@ -8,33 +8,6 @@ import pytest
 from frontend import proposal
 
 
-def test_parse_fenced_json_block():
-    text = (
-        "Here is what I'd file:\n"
-        "```json\n"
-        '{"diary": "Worked on atlas.", "actions": ["(B) call vendor +hw t:2026-06-11 upd:2026-06-04"],'
-        ' "topics": [{"slug": "atlas", "section": "## Current state", "text": "sync lag"}],'
-        ' "meetings": []}\n'
-        "```\n"
-    )
-    p = proposal.parse_proposal(text)
-    assert p["diary"] == "Worked on atlas."
-    assert p["actions"] == ["(B) call vendor +hw t:2026-06-11 upd:2026-06-04"]
-    assert p["topics"][0]["slug"] == "atlas"
-    assert p["meetings"] == []
-
-
-def test_parse_defaults_missing_keys():
-    p = proposal.parse_proposal('```json\n{"diary": "x"}\n```')
-    assert p == {"diary": "x", "actions": [], "topics": [], "meetings": []}
-
-
-def test_parse_raises_on_unparseable():
-    import pytest
-    with pytest.raises(proposal.ProposalError):
-        proposal.parse_proposal("no json here at all")
-
-
 def _root():
     return Path(tempfile.mkdtemp())
 
@@ -322,32 +295,26 @@ def test_sweep_confirm_rejects_section_outside_literal_set():
     """A section header not in the known literal set must raise ValidationError."""
     from pydantic import ValidationError
 
-    from frontend.app import SweepConfirm
+    from frontend.app import _SweepProposalBody
     with pytest.raises(ValidationError):
-        SweepConfirm(
-            proposal={
-                "diary": "", "actions": [],
-                "topics": [{"slug": "atlas", "section": "## Evil", "text": "x"}],
-                "meetings": [],
-            },
-            capture="x.md", session="s", last_id="m",
+        _SweepProposalBody(
+            diary="", actions=[],
+            topics=[{"slug": "atlas", "section": "## Evil", "text": "x"}],
+            meetings=[],
         )
 
 
 def test_sweep_confirm_caps_list_lengths_at_model_boundary():
-    """SweepConfirm must reject topic lists > MAX_TOPICS / action lists > MAX_ACTIONS."""
+    """_SweepProposalBody must reject topic lists > MAX_TOPICS / action lists > MAX_ACTIONS."""
     from pydantic import ValidationError
 
-    from frontend.app import SweepConfirm
+    from frontend.app import _SweepProposalBody
     with pytest.raises(ValidationError):
-        SweepConfirm(
-            proposal={
-                "diary": "", "actions": [],
-                "topics": [{"slug": f"t{i}", "section": "## Current state", "text": "x"}
-                           for i in range(100)],  # > MAX_TOPICS
-                "meetings": [],
-            },
-            capture="x.md", session="s", last_id="m",
+        _SweepProposalBody(
+            diary="", actions=[],
+            topics=[{"slug": f"t{i}", "section": "## Current state", "text": "x"}
+                    for i in range(100)],  # > MAX_TOPICS
+            meetings=[],
         )
 
 
@@ -355,15 +322,12 @@ def test_sweep_confirm_rejects_malformed_slug_at_model_boundary():
     """A topic with a traversal slug must raise ValidationError (Pydantic catches it)."""
     from pydantic import ValidationError
 
-    from frontend.app import SweepConfirm
+    from frontend.app import _SweepProposalBody
     with pytest.raises(ValidationError):
-        SweepConfirm(
-            proposal={
-                "diary": "", "actions": [],
-                "topics": [{"slug": "../etc", "section": "## Current state", "text": "x"}],
-                "meetings": [],
-            },
-            capture="x.md", session="s", last_id="m",
+        _SweepProposalBody(
+            diary="", actions=[],
+            topics=[{"slug": "../etc", "section": "## Current state", "text": "x"}],
+            meetings=[],
         )
 
 
@@ -392,37 +356,24 @@ def test_sweep_slug_boundary(slug, should_accept):
     """M-6: Pydantic regex/length boundary — 16 cases pin the contract."""
     from pydantic import ValidationError
 
-    from frontend.app import SweepConfirm
+    from frontend.app import _SweepProposalBody
     if should_accept:
         # Must not raise.
-        SweepConfirm(
-            proposal={"diary": "", "actions": [],
-                     "topics": [{"slug": slug, "section": "## Current state", "text": "x"}],
-                     "meetings": []},
-            capture="x.md", session="s", last_id="m",
+        _SweepProposalBody(
+            diary="", actions=[],
+            topics=[{"slug": slug, "section": "## Current state", "text": "x"}],
+            meetings=[],
         )
     else:
         with pytest.raises(ValidationError):
-            SweepConfirm(
-                proposal={"diary": "", "actions": [],
-                         "topics": [{"slug": slug, "section": "## Current state", "text": "x"}],
-                         "meetings": []},
-                capture="x.md", session="s", last_id="m",
+            _SweepProposalBody(
+                diary="", actions=[],
+                topics=[{"slug": slug, "section": "## Current state", "text": "x"}],
+                meetings=[],
             )
 
 
-# ── TDD-red: parse_proposal raw_decode (Group F) ────────────────────────────
 
-
-def test_parse_proposal_handles_brace_in_text_field():
-    """A topic text containing '{x}' must not be cut short by the fence regex."""
-    p = proposal.parse_proposal(
-        '```json\n{"diary": "", "actions": [],'
-        ' "topics": [{"slug": "atlas", "section": "## Current state",'
-        '             "text": "config {x} looks wrong"}],'
-        ' "meetings": []}\n```\n'
-    )
-    assert p["topics"][0]["text"] == "config {x} looks wrong"
 
 
 # ── TDD-red: multi-topic meeting frontmatter (Group A, ISC-8) ───────────────

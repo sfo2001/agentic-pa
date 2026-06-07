@@ -81,11 +81,10 @@ class _SweepProposalBody(BaseModel):
     task_ops: list[_SweepTaskOp] = Field(default_factory=list, max_length=proposal.MAX_TASK_OPS)
 
 
-class SweepConfirm(BaseModel):
-    proposal: _SweepProposalBody
-    capture: Annotated[str, Field(max_length=256)]
-    session: Annotated[str, Field(max_length=128)]
-    last_id: Annotated[str, Field(max_length=128)]
+class ConfirmBody(BaseModel):
+    session: str | None = None
+    last_id: str | None = None
+    capture: str | None = None
 
 
 def changelog_subject(agent_text: str) -> str | None:
@@ -147,113 +146,27 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
             return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
         return {"ok": True, "reverted": sha}
 
-    @app.post("/api/sweep")
-    async def post_sweep():
+    @app.post("/api/sweep/prep")
+    async def prep_sweep():
         try:
             sid = await proxy.ensure_session()
             msgs = await proxy.transcript()
         except (SessionLost, httpx.HTTPError, RuntimeError, ValueError):
-            # ensure_session() doesn't wrap HTTP/RuntimeError as SessionLost
-            # (only send/propose_ingest do) — do it here so the 503 path is
-            # uniform: the client UI uses 503 to mean "wait and retry".
             return JSONResponse(status_code=503, content={"ok": False, "error": "session lost"})
         after = sweep.read_watermark(notes_root, sid, git_dir=_git_dir)
         window, last_id = sweep.slice_window(msgs, after_id=after)
         if not window:
-            return {"ok": True, "proposal": None, "capture": None}
+            return {"ok": True, "capture": None, "session": None, "last_id": None}
         stamp = sweep.make_capture_stamp()
-        capture: Path | None = None
-        try:
-            # write_capture and propose_ingest both live inside the same
-            # try/finally. If write_capture itself raises (disk full, race
-            # with a concurrent delete) the capture is never created and
-            # the finally short-circuits via ``capture is None``. Otherwise
-            # the finally unconditionally archives the capture on every
-            # exit — including the happy path — so the lead abandon
-            # scenario (sweep → look → "not now" → close the panel) does
-            # not leave the capture in inbox/ and inflate the inbox badge.
-            capture = sweep.write_capture(notes_root, sweep.render_window_text(window), stamp=stamp)
-            text = await proxy.propose_ingest(f"inbox/{capture.name}")
-            prop = proposal.parse_proposal(text)
-        except SessionLost:
-            return JSONResponse(status_code=503, content={"ok": False, "error": "session lost"})
-        except proposal.ProposalError as exc:
-            # Drop the raw agent text from the response (it can include the
-            # user's braindump, action text, etc.). The 502 body is fixed text
-            # only.
-            return JSONResponse(
-                status_code=502,
-                content={"ok": False, "error": f"bad proposal: {exc}"},
-            )
-        finally:
-            # M1: /api/sweep owns the capture's lifetime. The capture is
-            # archived on every exit where it was successfully written
-            # (happy path, 502, 503-inner) so the lead abandon scenario
-            # — sweep → no /confirm — does not orphan the capture. If
-            # write_capture itself failed, capture is still None and the
-            # block is a no-op. archive_capture failures (OSError) are
-            # swallowed: best-effort cleanup must not mask the original
-            # error.
-            if capture is not None:
-                try:
-                    sweep.archive_capture(notes_root, capture)
-                except OSError:
-                    pass
-        # Stash the window's last id on the proposal so confirm can advance the watermark.
+        capture = sweep.write_capture(notes_root, sweep.render_window_text(window), stamp=stamp)
         return {
             "ok": True,
-            "proposal": prop,
             "capture": capture.name,
             "session": sid,
             "last_id": last_id,
         }
 
-    @app.post("/api/sweep/confirm")
-    async def post_sweep_confirm(body: SweepConfirm):
-        # Resolve + path-confine the capture filename. /confirm does not
-        # read or move the capture file itself (the capture was already
-        # archived by /api/sweep on its happy/error path — see the
-        # ``finally`` block in ``post_sweep``); this validation is defense
-        # in depth so any future /confirm that does touch the file
-        # inherits the same guard against a hostile or buggy client
-        # supplying ``body.capture = "../opencode.json"`` and walking out
-        # of inbox/.
-        notes_root_resolved = notes_root.resolve()
-        inbox_dir = (notes_root_resolved / "inbox").resolve()
-        cap_name = (body.capture or "").strip()
-        # Reject empty, too long, traversal (..\), subdirectory (/),
-        # NUL byte (which makes Path.resolve() raise ValueError), and
-        # the bare dot "." (would resolve to inbox_dir itself).
-        if (not cap_name or len(cap_name) > 200 or ".." in cap_name
-                or "\\" in cap_name or "\x00" in cap_name
-                or "/" in cap_name or cap_name == "."):
-            return JSONResponse(
-                status_code=400,
-                content={"ok": False, "error": "invalid capture name"},
-            )
-        cap_path = (inbox_dir / cap_name).resolve()
-        if not cap_path.is_relative_to(inbox_dir):
-            return JSONResponse(
-                status_code=403,
-                content={"ok": False, "error": "capture escapes inbox/"},
-            )
-        # The Pydantic body is a model; serialise to a plain dict for the applier.
-        prop_dict = body.proposal.model_dump()
-        async with git_lock:
-            summary = proposal.apply_proposal(notes_root, prop_dict)
-            # Advance the watermark BEFORE committing: a failed watermark
-            # write (disk full / permission) means the next sweep would
-            # re-process the same window, creating duplicate actions. By
-            # writing the watermark first, a failed commit_all leaves the
-            # watermark advanced — the turn's structure is in the previous
-            # commit but the next sweep won't re-process it. This is a
-            # fixed-cost idempotency trade-off.
-            sweep.write_watermark(notes_root, body.session, body.last_id, git_dir=_git_dir)
-            findings = wiki.run_housekeeping(notes_root)
-            committed = versioning.commit_all(
-                notes_root, f"sweep: diary+structure {cap_name}", git_dir=_git_dir
-            )
-        return {"ok": True, "applied": summary, "committed": committed, "lint": findings}
+
 
     @app.get("/api/events")
     async def events():
@@ -299,7 +212,7 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
             return JSONResponse(status_code=500, content={"ok": False, "error": "corrupted proposal file"})
 
     @app.post("/api/proposal/confirm")
-    async def confirm_proposal():
+    async def confirm_proposal(body: ConfirmBody | None = None):
         from pydantic import ValidationError
 
         p = notes_root / "inbox" / _PROPOSAL_FILE
@@ -318,7 +231,7 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
             except json.JSONDecodeError:
                 return JSONResponse(status_code=400, content={"ok": False, "error": "corrupted proposal file"})
             try:
-                body = _SweepProposalBody.model_validate(prop)
+                body_validated = _SweepProposalBody.model_validate(prop)
             except ValidationError as exc:
                 return JSONResponse(
                     status_code=400,
@@ -332,12 +245,25 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
                     },
                 )
             try:
-                task_ops = [t.model_dump() for t in body.task_ops]
+                task_ops = [t.model_dump() for t in body_validated.task_ops]
                 summary = proposal.apply_proposal(notes_root, prop, task_ops=task_ops)
+                # Advance watermark before commit if sweep metadata present
+                # (same idempotency trade-off as old /api/sweep/confirm).
+                if body is not None and body.session and body.last_id:
+                    sweep.write_watermark(notes_root, body.session, body.last_id, git_dir=_git_dir)
                 findings = wiki.run_housekeeping(notes_root)
                 committed = versioning.commit_all(notes_root, "proposal: confirmed", git_dir=_git_dir)
             finally:
                 p.unlink(missing_ok=True)
+        # Archive capture after lock release (best-effort).
+        if body is not None and body.capture:
+            inbox = (notes_root / "inbox").resolve()
+            cap_path = (inbox / body.capture).resolve()
+            if cap_path.is_relative_to(inbox) and cap_path.is_file():
+                try:
+                    sweep.archive_capture(notes_root, cap_path)
+                except OSError:
+                    pass
         return {"ok": True, "applied": summary, "committed": committed, "lint": findings}
 
     @app.post("/api/upload")
