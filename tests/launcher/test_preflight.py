@@ -3,10 +3,13 @@ import socket
 import subprocess
 import sys
 
+import pytest
+
 from launcher.run import (
     _module_importable,
     _probe_module_import,
     _python_m_module,
+    _soft_probe_present,
     agenda_server_path,
     isolated_env,
     no_git_ancestor,
@@ -219,6 +222,29 @@ def test_present_mcp_command_none_when_missing_or_empty(tmp_path):
     assert present_mcp_command(tmp_path) is None  # empty command
 
 
+def test_present_mcp_command_none_on_malformed_json(tmp_path):
+    (tmp_path / "opencode.json").write_text("not json", encoding="utf-8")
+    assert present_mcp_command(tmp_path) is None
+
+
+def test_present_mcp_command_none_when_key_missing(tmp_path):
+    # Missing mcp.present.command — covers the KeyError branch.
+    (tmp_path / "opencode.json").write_text(json.dumps({}), encoding="utf-8")
+    assert present_mcp_command(tmp_path) is None
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({"mcp": {"present": {}}}), encoding="utf-8"
+    )
+    assert present_mcp_command(tmp_path) is None
+
+
+def test_present_mcp_command_none_when_command_is_wrong_type(tmp_path):
+    # command must be a list — a string is malformed (TypeError branch).
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({"mcp": {"present": {"command": "x"}}}), encoding="utf-8"
+    )
+    assert present_mcp_command(tmp_path) is None
+
+
 def test_probe_module_import_ok_for_stdlib():
     ok, err = _probe_module_import(sys.executable, "json")
     assert ok is True
@@ -228,19 +254,42 @@ def test_probe_module_import_ok_for_stdlib():
 def test_probe_module_import_reports_reason_for_missing_module():
     ok, err = _probe_module_import(sys.executable, "no_such_module_xyz_42")
     assert ok is False
-    assert "ModuleNotFoundError" in err or "No module named" in err
+    # The exact module name appears in every CPython release's ModuleNotFoundError;
+    # pinning on that string (not a paraphrase) keeps the test stable.
+    assert "no_such_module_xyz_42" in err
+    assert err.strip() != ""
 
 
-def test_probe_module_import_rejects_malformed_name_without_spawning():
+def test_probe_module_import_rejects_malformed_name_without_spawning(monkeypatch):
+    # Regex guard must reject BEFORE the subprocess runs — a tampered
+    # opencode.json could otherwise smuggle code via the -c string.
+    def boom(*a, **k):
+        raise AssertionError("subprocess.run must not be reached for malformed names")
+
+    monkeypatch.setattr("launcher.run.subprocess.run", boom)
     ok, err = _probe_module_import(sys.executable, "os; import subprocess")
     assert ok is False
     assert "invalid module name" in err
 
 
+def test_probe_module_import_false_on_timeout(monkeypatch):
+    # A hung import (TimeoutExpired, a SubprocessError) must fail closed, not raise.
+    def boom(*a, **k):
+        raise subprocess.TimeoutExpired(cmd="python", timeout=10)
+
+    monkeypatch.setattr("launcher.run.subprocess.run", boom)
+    ok, err = _probe_module_import(sys.executable, "json")
+    assert ok is False
+    assert err  # the stringified exception
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only path semantics")
 def test_probe_module_import_honours_cwd(tmp_path):
     # A module importable only because of a file in cwd must NOT import from a
     # different cwd — proving the probe runs where OpenCode spawns the server
-    # (the exact dimension that hid the present-MCP crash).
+    # (the exact dimension that hid the present-MCP crash). POSIX-only: on
+    # Windows, sys.path[0] for `python -c` may not always be cwd-relative,
+    # so the cwd-sensitive assertion is unreliable.
     (tmp_path / "only_here_pkg.py").write_text("x = 1\n", encoding="utf-8")
     other = tmp_path / "sub"
     other.mkdir()
@@ -248,3 +297,38 @@ def test_probe_module_import_honours_cwd(tmp_path):
     ok_else, _ = _probe_module_import(sys.executable, "only_here_pkg", cwd=str(other))
     assert ok_here is True
     assert ok_else is False
+
+
+# ── _soft_probe_present: integration of present_mcp_command + _probe_module_import
+
+
+def test_soft_probe_present_none_when_no_command(tmp_path):
+    # No opencode.json — nothing to warn about, the launcher's soft-probe is a no-op.
+    assert _soft_probe_present(tmp_path, str(tmp_path)) is None
+
+
+def test_soft_probe_present_none_when_module_imports(tmp_path):
+    # The probe succeeds for a stdlib module → no warn.
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({
+            "mcp": {"present": {"command": [sys.executable, "-m", "json"]}},
+        }),
+        encoding="utf-8",
+    )
+    assert _soft_probe_present(tmp_path, str(tmp_path)) is None
+
+
+def test_soft_probe_present_returns_reason_on_failure(tmp_path, capfd):
+    # A non-existent module → the probe returns a one-line "Reason: …" warn.
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({
+            "mcp": {"present": {"command": [sys.executable, "-m", "no_such_module_xyz_42"]}},
+        }),
+        encoding="utf-8",
+    )
+    reason = _soft_probe_present(tmp_path, str(tmp_path))
+    assert reason is not None
+    assert reason.startswith("Reason: ")
+    # The exact module name is in the traceback; the helper surfaces it
+    # so the launcher's stderr line is informative.
+    assert "no_such_module_xyz_42" in reason
