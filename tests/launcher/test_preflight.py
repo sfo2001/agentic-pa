@@ -5,12 +5,14 @@ import sys
 
 from launcher.run import (
     _module_importable,
+    _probe_module_import,
     _python_m_module,
     agenda_server_path,
     isolated_env,
     no_git_ancestor,
     notes_mcp_command,
     port_is_free,
+    present_mcp_command,
     require_tools,
 )
 
@@ -196,3 +198,53 @@ def test_module_importable_false_on_timeout(monkeypatch):
 
     monkeypatch.setattr("launcher.run.subprocess.run", boom)
     assert _module_importable(sys.executable, "json") is False
+
+
+# ── present MCP soft-probe (surface a crashed optional server at launch) ─────
+
+
+def test_present_mcp_command_reads_opencode_json(tmp_path):
+    cmd = ["/opt/.venv/bin/python", "-m", "presenter.server"]
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({"mcp": {"present": {"command": cmd}}}), encoding="utf-8"
+    )
+    assert present_mcp_command(tmp_path) == cmd
+
+
+def test_present_mcp_command_none_when_missing_or_empty(tmp_path):
+    assert present_mcp_command(tmp_path) is None  # no opencode.json
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({"mcp": {"present": {"command": []}}}), encoding="utf-8"
+    )
+    assert present_mcp_command(tmp_path) is None  # empty command
+
+
+def test_probe_module_import_ok_for_stdlib():
+    ok, err = _probe_module_import(sys.executable, "json")
+    assert ok is True
+    assert err == ""
+
+
+def test_probe_module_import_reports_reason_for_missing_module():
+    ok, err = _probe_module_import(sys.executable, "no_such_module_xyz_42")
+    assert ok is False
+    assert "ModuleNotFoundError" in err or "No module named" in err
+
+
+def test_probe_module_import_rejects_malformed_name_without_spawning():
+    ok, err = _probe_module_import(sys.executable, "os; import subprocess")
+    assert ok is False
+    assert "invalid module name" in err
+
+
+def test_probe_module_import_honours_cwd(tmp_path):
+    # A module importable only because of a file in cwd must NOT import from a
+    # different cwd — proving the probe runs where OpenCode spawns the server
+    # (the exact dimension that hid the present-MCP crash).
+    (tmp_path / "only_here_pkg.py").write_text("x = 1\n", encoding="utf-8")
+    other = tmp_path / "sub"
+    other.mkdir()
+    ok_here, _ = _probe_module_import(sys.executable, "only_here_pkg", cwd=str(tmp_path))
+    ok_else, _ = _probe_module_import(sys.executable, "only_here_pkg", cwd=str(other))
+    assert ok_here is True
+    assert ok_else is False

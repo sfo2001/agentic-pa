@@ -91,6 +91,20 @@ def notes_mcp_command(install_root: Path | str) -> list[str] | None:
     return cmd if isinstance(cmd, list) and cmd else None
 
 
+def present_mcp_command(install_root: Path | str) -> list[str] | None:
+    """Read the full ``mcp.present.command`` argv from <install_root>/opencode.json.
+
+    The present MCP (the presentation pane plus the propose/file tools) is
+    optional (ADR-0006), so this feeds a soft launch-time probe rather than a
+    hard gate. Returns the command list, or None if missing/malformed/empty."""
+    try:
+        cfg = json.loads((Path(install_root) / "opencode.json").read_text(encoding="utf-8"))
+        cmd = cfg["mcp"]["present"]["command"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return cmd if isinstance(cmd, list) and cmd else None
+
+
 def agenda_server_path(install_root: Path | str) -> str | None:
     """First token of the notes MCP command — the interpreter for the
     ``python -m`` form, or a bare exe path for the legacy form. None if the
@@ -128,6 +142,32 @@ def _module_importable(interpreter: str, module: str) -> bool:
     except (OSError, subprocess.SubprocessError):
         # SubprocessError covers TimeoutExpired (a hung import) — fail closed.
         return False
+
+
+def _probe_module_import(
+    interpreter: str, module: str, cwd: str | None = None
+) -> tuple[bool, str]:
+    """Run ``import <module>`` under *interpreter* from *cwd*; return ``(ok, stderr)``.
+
+    Unlike :func:`_module_importable` (a bool hard-gate for the load-bearing
+    notes server) this captures the failure *reason* and honours *cwd*. That
+    matters: OpenCode spawns each MCP server with ``cwd`` set to the notes
+    workspace, and import resolution can differ there — e.g. a local package
+    whose name collides with an installed PyPI distribution resolves to the
+    other one when the repo dir is not on ``sys.path[0]``. Probing from the
+    same cwd is what makes a startup crash reproducible at launch instead of
+    only inside OpenCode's buried log. Same fail-closed regex guard as
+    ``_module_importable`` so a tampered config can't smuggle code via ``-c``."""
+    if not _MODULE_NAME_RE.fullmatch(module):
+        return False, f"invalid module name: {module!r}"
+    try:
+        r = subprocess.run(
+            [interpreter, "-c", f"import {module}"],
+            capture_output=True, timeout=10, cwd=cwd,
+        )
+        return r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
 
 
 def _wait_health(url: str, timeout: float = 30.0, password: str | None = None) -> bool:
@@ -307,12 +347,14 @@ def main() -> int:
               f"'{interpreter}'; the agent's deterministic agenda tools would fail. "
               "Reinstall the agenda package and re-run bootstrap.", file=sys.stderr)
         return 2
-    # Deliberately NOT hard-gating the `present` MCP module here. Notes is
-    # load-bearing (the agent's deterministic agenda tools) so a broken install
-    # must abort; the presentation pane is optional and degrades gracefully
-    # (ADR-0006) — OpenCode runs without it, and the wizard's check_environment
-    # already warns at install time if `presenter` isn't importable. Adding a
-    # second per-launch subprocess probe for an optional component isn't worth it.
+    # The `present` MCP is NOT hard-gated: notes is load-bearing (the agent's
+    # deterministic agenda tools) so a broken install must abort, but the
+    # presentation pane is optional and degrades gracefully (ADR-0006). It is,
+    # however, soft-probed below — spawned the way OpenCode will (cwd=workspace)
+    # so an import that only breaks from that cwd surfaces here. A failure WARNS
+    # rather than aborts; without this, a crashed present server is silent at
+    # launch (it shows only in OpenCode's buried log) yet leaves the agent with
+    # no propose/file tool, so it cannot file anything.
     # NOTE: ports are checked then bound below — a benign check-then-bind (TOCTOU)
     # race exists, acceptable for a single-user localhost deployment.
     for p in (oc_port, web_port):
@@ -330,6 +372,24 @@ def main() -> int:
     # opencode.json files generated before that change lack it). Without this,
     # the present server would raise a RuntimeError on startup.
     _ensure_present_notes_root(install_root)
+
+    # Soft probe of the optional present MCP (see the not-hard-gated note above),
+    # spawned from cwd=workspace exactly as OpenCode will. Warn loudly on failure
+    # — the agent stays up but cannot file proposals.
+    present_cmd = present_mcp_command(install_root)
+    present_module = _python_m_module(present_cmd) if present_cmd else None
+    if present_module:
+        ok, err = _probe_module_import(present_cmd[0], present_module, cwd=str(workspace))
+        if not ok:
+            reason = next((ln for ln in reversed(err.strip().splitlines()) if ln.strip()),
+                          "<no output>")
+            print(
+                f"WARNING: the 'present' MCP server ('{present_module}') fails to start "
+                f"from the notes workspace — the presentation pane and the propose/file "
+                f"tools will be UNAVAILABLE, so the agent cannot file proposals. "
+                f"Reason: {reason}",
+                file=sys.stderr,
+            )
 
     # A per-run random password authenticates the localhost OpenCode server so
     # other local processes/users cannot drive the sandboxed agent (design §8).
