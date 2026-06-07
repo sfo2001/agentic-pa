@@ -6,6 +6,8 @@ handlers, javascript: URLs, and disallowed tags) before it reaches the browser.
 """
 from __future__ import annotations
 
+import re
+
 import markdown as _markdown
 import nh3
 
@@ -32,5 +34,18 @@ _ALLOWED_TAGS: frozenset[str] = frozenset({
 
 def render_markdown(text: str) -> str:
     """Markdown string -> sanitized HTML string (safe to inject into the pane)."""
+    text = _normalize_bold_delimiters(text)
     raw_html = _markdown.markdown(text, extensions=["extra", "sane_lists", "tables"])
     return nh3.clean(raw_html, tags=_ALLOWED_TAGS)
+
+
+def _normalize_bold_delimiters(text: str) -> str:
+    """Strip whitespace inside ``**`` pairs so ``** bold**`` renders as bold.
+
+    LLMs commonly emit ``** bold**`` (space after the opening ``**``), which is
+    invalid markdown and renders as literal asterisks.  This normalises both the
+    opening and closing sides without changing valid ``**bold**``.
+    """
+    text = re.sub(r"\*\* +(\S)", r"**\1", text)
+    text = re.sub(r"(\S) +\*\*", r"\1**", text)
+    return text
