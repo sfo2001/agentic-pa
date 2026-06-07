@@ -82,7 +82,7 @@ function runTurn(text) {
   let bubble = null;
   let thinking = null;
   const es = new EventSource("/api/events");
-  const finish = () => { es.close(); setBusy(false); refreshInbox(); };
+  const finish = () => { es.close(); setBusy(false); refreshInbox(); checkPendingProposal(); };
 
   es.onopen = () => {
     fetch("/api/message", {
@@ -165,6 +165,7 @@ undoBtn.addEventListener("click", async () => {
 // ── Sweep: review a structured proposal, then confirm to apply ────────────────
 const sweepBtn = document.getElementById("sweep");
 const sweepPanel = document.getElementById("sweep-panel");
+const sweepPanelHeader = document.getElementById("sweep-panel-header");
 const sweepDiary = document.getElementById("sweep-diary");
 const sweepActions = document.getElementById("sweep-actions");
 const sweepTopics = document.getElementById("sweep-topics");
@@ -172,9 +173,23 @@ const sweepConfirm = document.getElementById("sweep-confirm");
 const sweepCancel = document.getElementById("sweep-cancel");
 // Wrap in an object so the reference itself is `const` (the slot is
 // reassigned by setSweepContext/clearSweepContext, not the variable).
-const sweepContext = { current: null };  // {proposal, capture, session, last_id}
-const setSweepContext = (ctx) => { sweepContext.current = ctx; };
-const clearSweepContext = () => { sweepContext.current = null; };
+// `{proposal, capture?, session?, last_id?, mcp?}` — `mcp: true` marks an
+// agent-staged proposal (the one the user is asked to file); otherwise
+// it's a Sweep flow. The header text is derived from this flag so the
+// two flows can't overwrite each other's label.
+const sweepContext = { current: null };
+const setSweepContext = (ctx) => {
+  sweepContext.current = ctx;
+  // Header text is a function of the proposal's source (MCP vs Sweep), not
+  // a side effect of each render — set here so a chat-driven MCP proposal
+  // landing while a Sweep is in-flight (or vice versa) cannot clobber the
+  // visible label.
+  sweepPanelHeader.textContent = ctx && ctx.mcp ? "Proposal to file" : "Sweep proposal";
+};
+const clearSweepContext = () => {
+  sweepContext.current = null;
+  sweepPanelHeader.textContent = "";  // reset so the next setSweepContext wins
+};
 
 function _clearSweepPanel() {
   sweepDiary.value = "";
@@ -206,25 +221,21 @@ function _renderSweepList(ul, items, kind) {
 async function runSweep() {
   if (composer.getAttribute("aria-disabled") === "true") return;
   setBusy(true);
-  _clearSweepPanel();
   try {
-    const r = await fetch("/api/sweep", { method: "POST" });
+    const r = await fetch("/api/sweep/prep", { method: "POST" });
     const j = await r.json();
     if (!r.ok || !j.ok) {
-      addMsg("system", `Sweep failed: ${j.error || r.status}`);
+      addMsg("system", `Sweep prep failed: ${j.error || r.status}`);
       return;
     }
-    if (!j.proposal) {
+    if (!j.capture) {
       addMsg("system", "Nothing new to sweep.");
       return;
     }
-    setSweepContext({ proposal: j.proposal, capture: j.capture, session: j.session, last_id: j.last_id });
-    sweepDiary.value = j.proposal.diary || "";
-    _renderSweepList(sweepActions, j.proposal.actions || [], "action");
-    _renderSweepList(sweepTopics, j.proposal.topics || [], "topic");
-    sweepPanel.hidden = false;
+    setSweepContext({ capture: j.capture, session: j.session, last_id: j.last_id });
+    runTurn(`Ingest the file inbox/${j.capture} in PROPOSE mode via present_propose`);
   } catch (_) {
-    addMsg("system", "Sweep network error.");
+    addMsg("system", "Sweep prep network error.");
   } finally {
     setBusy(false);
   }
@@ -240,47 +251,76 @@ sweepCancel.addEventListener("click", () => {
 sweepConfirm.addEventListener("click", async () => {
   const ctx = sweepContext.current;
   if (!ctx) return;
-  // Build the edited proposal from the panel's current state.
-  const diary = sweepDiary.value;
-  const actions = [];
-  sweepActions.querySelectorAll("li").forEach((li) => {
-    const cb = li.querySelector("input");
-    if (cb.checked) actions.push(li.querySelector("label").textContent);
-  });
-  const topics = [];
-  sweepTopics.querySelectorAll("li").forEach((li) => {
-    const cb = li.querySelector("input");
-    if (!cb.checked) return;
-    const orig = ctx.proposal.topics[Number(cb.dataset.idx)];
-    topics.push(orig);
-  });
-  const edited = {
-    proposal: { diary, actions, topics, meetings: ctx.proposal.meetings || [] },
-    capture: ctx.capture,
-    session: ctx.session,
-    last_id: ctx.last_id,
-  };
   sweepPanel.hidden = true;
   setBusy(true);
   try {
-    const r = await fetch("/api/sweep/confirm", {
+    const body = {};
+    if (ctx.session && ctx.last_id) {
+      body.session = ctx.session;
+      body.last_id = ctx.last_id;
+    }
+    if (ctx.capture) {
+      body.capture = ctx.capture;
+    }
+    const hasBody = Object.keys(body).length > 0;
+    const r = await fetch("/api/proposal/confirm", {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(edited),
+      headers: hasBody ? { "content-type": "application/json" } : {},
+      body: hasBody ? JSON.stringify(body) : undefined,
     });
     const j = await r.json();
     if (r.ok && j.ok) {
       const a = j.applied || {};
-      addMsg("system", `Sweep applied: diary=${a.diary ? 1 : 0}, +${a.actions || 0} actions, +${a.topics || 0} topic edits, +${a.meetings || 0} meetings.`);
+      addMsg("system", `Filed: diary=${a.diary ? 1 : 0}, +${a.actions || 0} actions, +${a.topics || 0} topic edits, +${a.meetings || 0} meetings.`);
     } else {
-      addMsg("system", `Sweep confirm failed: ${j.error || r.status}`);
+      addMsg("system", `Confirm failed: ${j.error || r.status}`);
     }
   } catch (_) {
-    addMsg("system", "Sweep confirm network error.");
+    addMsg("system", "Confirm network error.");
   } finally {
     setBusy(false);
     clearSweepContext();
   }
 });
 
+// ── MCP proposal: the agent's present_propose stages inbox/_proposal.json.
+// Surface it in the same review panel (on load and on the done/error of each
+// turn) and confirm via /api/proposal/confirm. Without this the staged
+// proposal is invisible — present_propose "completes" but nothing actionable
+// appears in the UI.
+//
+// Concurrency: an in-flight guard prevents two overlapping polls from
+// interleaving. With the SSE-event-source-per-turn design, two rapid user
+// messages can produce overlapping `finish()` paths, each starting a
+// fetch("/api/proposal"). The second call is skipped (a no-op), so the panel
+// reflects whichever response arrives first — and re-rendering the same
+// content is idempotent.
+let _proposalCheckInFlight = false;
+async function checkPendingProposal() {
+  if (_proposalCheckInFlight) return;
+  _proposalCheckInFlight = true;
+  try {
+    const r = await fetch("/api/proposal");
+    if (r.status === 404) return;            // nothing staged — the common case
+    const j = await r.json();
+    if (!r.ok || !j.ok || !j.proposal) return;
+    _clearSweepPanel();
+    // Preserve sweep metadata (capture, session, last_id) if set by runSweep.
+    const existing = sweepContext.current || {};
+    setSweepContext({
+      proposal: j.proposal,
+      capture: existing.capture || null,
+      session: existing.session || null,
+      last_id: existing.last_id || null,
+    });
+    sweepPanelHeader.textContent = "Proposal to file";
+    sweepDiary.value = j.proposal.diary || "";
+    _renderSweepList(sweepActions, j.proposal.actions || [], "action");
+    _renderSweepList(sweepTopics, j.proposal.topics || [], "topic");
+    sweepPanel.hidden = false;
+  } catch (_) { /* transient; the next turn re-checks */ }
+  finally { _proposalCheckInFlight = false; }
+}
+
 refreshInbox();
+checkPendingProposal();

@@ -124,9 +124,12 @@ def main() -> int:
     print()
     # cwd=REPO so the wizard resolves `frontend`/`launcher` imports; all paths
     # above are REPO-anchored so main() no longer depends on (or mutates) the cwd.
-    return subprocess.run(
-        [py, "-m", "frontend.setup_wizard"], env=wiz_env, cwd=str(REPO)
-    ).returncode
+    try:
+        return subprocess.run(
+            [py, "-m", "frontend.setup_wizard"], env=wiz_env, cwd=str(REPO)
+        ).returncode
+    except KeyboardInterrupt:
+        return 0
 
 
 if __name__ == "__main__":

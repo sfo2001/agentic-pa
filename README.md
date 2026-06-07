@@ -27,7 +27,7 @@ browser ── HTTP/SSE ──► frontend (FastAPI)  ── HTTP ──►  ope
 |---|---|
 | `agenda/` | Deterministic, **read-only** agenda engine + MCP server (`notes_today/review/topic`). Parser → models → engine → FastMCP server. |
 | `frontend/` | The sole OpenCode HTTP client: session proxy, SSE relay, browser API, document upload, notes git versioning, install bootstrap, config builder. Also hosts the propose-confirm ingest flow (proposal schema + apply layer). |
-| `presenter/` | MCP server: `present(path)` UI signal (show file in the Presentation pane) + `propose(proposal)` ingest tool (stage the agent's structured proposal for user confirmation). Shared validation constants live in `frontend/proposal.py` (one source of truth, imported by both packages). |
+| `presenter/` | MCP server: `present(path)` UI signal (show file in the Presentation pane) + `propose(diary, actions, topics, meetings)` ingest tool (stage the agent's structured proposal for user confirmation, with each field passed as a native typed argument). Shared validation constants live in `frontend/proposal.py` (one source of truth, imported by both packages). |
 | `launcher/` | One-command launcher: pre-flight, start OpenCode + frontend, health-gate, clean shutdown. |
 | `notes-mvp/` | Dev helper: generates a local `opencode.json` against `sample-notes/`. |
 

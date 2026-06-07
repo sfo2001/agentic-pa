@@ -1,9 +1,20 @@
 [project]
 name = "presenter-service"
 dynamic = ["version"]
-description = "MCP server: the present(path) UI signal and propose(proposal) ingest tool"
+description = "MCP server: the present(path) UI signal and propose(diary, actions, topics, meetings) ingest tool"
 requires-python = ">=3.10"
-dependencies = ["mcp>=1.2.0,<2", "frontend"]
+# `notes-frontend` is the local sibling package (it ships the `frontend`
+# import package). It MUST be named by its distribution name here, not the
+# bare import name `frontend`. Naming it `"frontend"` would:
+#   (a) pull an unrelated PyPI package (`frontend==0.0.3`, last release
+#       2020-04-15, 0 reported downloads) whose import shadow crashes the
+#       present MCP server on startup (RuntimeError: Directory 'static/'
+#       does not exist) — the dependency-confusion class of failure that
+#       hides the cause behind OpenCode's buried log; and
+#   (b) introduce a GPLv3+ licensed dependency into an MIT-licensed
+#       project, which would be a license-incompatible distribution.
+# `notes-frontend` resolves to the local editable install instead.
+dependencies = ["mcp>=1.2.0,<2", "notes-frontend"]
 
 [project.scripts]
 present-server = "presenter.server:main"

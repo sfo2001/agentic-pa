@@ -151,45 +151,6 @@ def _find_balanced_json_object(text: str) -> str | None:
     return None
 
 
-def parse_proposal(agent_text: str) -> dict:
-    """Extract and normalise the structured proposal from *agent_text*.
-
-    Accepts the last ```` ```json ```` fenced object, or a bare JSON object.
-    Raises ProposalError if no JSON object can be parsed. Missing keys default
-    to empties.
-
-    Uses ``json.JSONDecoder.raw_decode`` so inner braces in string fields
-    (e.g. a topic text containing ``{x}``) are not mistaken for the
-    object's close brace.
-    """
-    text = agent_text or ""
-    fenced = re.findall(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
-    raw: str | None = None
-    if fenced:
-        # Try each fenced block; take the last one that parses as a dict.
-        for candidate in reversed(fenced):
-            obj = _find_balanced_json_object(candidate)
-            if obj is not None:
-                raw = obj
-                break
-    if raw is None:
-        raw = _find_balanced_json_object(text)
-    if raw is None:
-        raise ProposalError("no JSON proposal found in agent output")
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ProposalError(f"invalid proposal JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ProposalError("proposal is not a JSON object")
-    return {
-        "diary": str(data.get("diary", "")),
-        "actions": list(data.get("actions", []) or []),
-        "topics": list(data.get("topics", []) or []),
-        "meetings": list(data.get("meetings", []) or []),
-    }
-
-
 
 def _append_diary(notes_root: Path, text: str, now: datetime.datetime) -> None:
     if not text.strip():

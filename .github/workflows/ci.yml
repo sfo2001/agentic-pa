@@ -43,6 +43,13 @@ jobs:
             agenda/requirements-dev.txt
             frontend/requirements-dev.txt
 
+      # Node 20 LTS — used for `node --check frontend/ui/app.js` and to run the
+      # JS-side test harness via the pytest wrapper in tests/frontend/test_app_js.py.
+      # Pin to a SHA before relying on this for a release gate.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       - name: Install packages + dev deps
         run: |
           python -m pip install --upgrade pip
@@ -54,6 +61,12 @@ jobs:
 
       - name: Lint (ruff)
         run: ruff check agenda frontend launcher notes-mvp presenter tests bootstrap_env.py install.py launch.py
+
+      # Syntax-gate the single non-trivial JS file. The behavior tests for
+      # `checkPendingProposal` run via the pytest wrapper in the next step
+      # (tests/frontend/test_app_js.py subprocess-runs node on the harness).
+      - name: JS syntax check (node --check)
+        run: node --check frontend/ui/app.js
 
       - name: Unit tests (pytest)
         # The end-to-end smoke under tests/smoke/ needs a live model and is not
