@@ -272,21 +272,10 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
                     pass
         return {"ok": True, "applied": summary, "committed": committed, "lint": findings}
 
-    _MAX_ACTIONS_RENDER = 500
-
     @app.get("/api/actions")
     async def actions():
         view = engine.today(notes_root)
-        buckets = {k: view[k] for k in
-                   ("do_now", "overdue", "schedule", "resurfacing", "stale_important")}
-        total = sum(len(v) for v in buckets.values())
-        truncated = total > _MAX_ACTIONS_RENDER
-        if truncated:
-            seen = 0
-            for k in ("do_now", "overdue", "schedule", "resurfacing", "stale_important"):
-                room = max(0, _MAX_ACTIONS_RENDER - seen)
-                buckets[k] = buckets[k][:room]
-                seen += len(buckets[k])
+        buckets, truncated = render_pane.cap_buckets(view)
         return {"ok": True, "date": view["date"], "buckets": buckets, "truncated": truncated}
 
     @app.get("/api/diary/today")
@@ -326,7 +315,11 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
     @app.post("/api/pane/actions/task-op")
     async def pane_task_op(body: _TaskOpBody):
         async with git_lock:
-            proposal.stage_task_op(notes_root, body.id, body.op, body.value)
+            res = proposal.stage_task_op(notes_root, body.id, body.op, body.value)
+        if not res["ok"]:
+            # Surface the failure to the client (which shows it via addMsg)
+            # instead of silently re-rendering as if it had succeeded.
+            return HTMLResponse(f"Task op failed: {res['error']}", status_code=400)
         return HTMLResponse(render_pane.actions(notes_root))
 
     @app.post("/api/task_op")

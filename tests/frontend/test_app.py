@@ -1147,3 +1147,29 @@ async def test_pane_task_op_stages_and_refreshes(tmp_path):
     assert r.status_code == 200
     assert (tmp_path / "inbox" / "_proposal.json").exists()
     assert "Task to complete" in r.text or "No open actions" in r.text
+
+
+async def test_pane_task_op_unknown_id_returns_400(tmp_path):
+    """A task-op against a non-existent id must surface a 400, not a silent 200."""
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(B) Real task +x upd:2026-06-04 id:abc999\n", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/pane/actions/task-op",
+                         json={"id": "zzz999", "op": "complete", "value": None})
+    assert r.status_code == 400
+    assert "Task op failed" in r.text
+    # Nothing should have been staged.
+    assert not (tmp_path / "inbox" / "_proposal.json").exists()
+
+
+async def test_pane_task_op_bad_reprioritize_value_returns_400(tmp_path):
+    """An out-of-range reprioritize value must 400 rather than no-op as success."""
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(B) Real task +x upd:2026-06-04 id:abc999\n", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/pane/actions/task-op",
+                         json={"id": "abc999", "op": "reprioritize", "value": "Z"})
+    assert r.status_code == 400
+    assert "Task op failed" in r.text

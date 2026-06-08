@@ -27,6 +27,10 @@ function switchTab(tab) {
   });
 }
 
+// Tab switching via delegated listeners (CSP-friendly; no inline onclick).
+document.querySelectorAll(".pane-tab").forEach((b) =>
+  b.addEventListener("click", () => switchTab(b.dataset.tab)));
+
 paneBody.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-op]");
   if (!btn) return;
@@ -36,8 +40,10 @@ paneBody.addEventListener("click", (e) => {
   fetch("/api/pane/actions/task-op", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, op, value }),
-  }).then((r) => r.text()).then((html) => {
-    paneBody.innerHTML = html;
+  }).then(async (r) => {
+    const html = await r.text();
+    if (!r.ok) { addMsg("system", html || "Task op failed."); return; }
+    paneBody.innerHTML = html;        // server-rendered, escaped in pane.py
     checkPendingProposal();
   }).catch(() => {
     addMsg("system", "Task op network error.");
@@ -54,10 +60,14 @@ async function showArtifact(path) {
   try {
     const r = await fetch("/api/file?path=" + encodeURIComponent(path));
     const j = await r.json();
-    if (!r.ok) { paneBody.innerHTML = `<p>Could not open ${path}: ${j.error || r.status}</p>`; return; }
+    if (!r.ok) { paneBody.textContent = `Could not open ${path}: ${j.error || r.status}`; return; }
     document.getElementById("pane-header").textContent = j.path;
-    paneBody.innerHTML = j.html || j.text || "";
-  } catch (_) { paneBody.innerHTML = `<p>Network error opening ${path}.</p>`; }
+    // Markdown files arrive as server-sanitized `html`; everything else is raw
+    // file text and MUST render via textContent (never innerHTML) — an agent-
+    // written .txt could otherwise carry an executable <img onerror=…> payload.
+    if (j.html != null) paneBody.innerHTML = j.html;
+    else paneBody.textContent = j.text || "";
+  } catch (_) { paneBody.textContent = `Network error opening ${path}.`; }
 }
 
 function addMsg(kind, text) {

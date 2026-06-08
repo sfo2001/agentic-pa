@@ -198,15 +198,27 @@ Browser
   ├─ POST /api/sweep       ──► proxy.transcript() + slice + propose_ingest()
   │                          → returns {proposal, capture, session, last_id}
   │                          (no writes; agent emits a structured JSON block)
-  └─ POST /api/sweep/confirm ──► proposal.apply_proposal() (deterministic)
-                                + sweep.archive_capture() + wiki housekeeping
-                                + versioning.commit_all() + watermark advance
+  ├─ POST /api/sweep/confirm ──► proposal.apply_proposal() (deterministic)
+  │                            + sweep.archive_capture() + wiki housekeeping
+  │                            + versioning.commit_all() + watermark advance
+  ├─ GET  /api/file        ──► render_markdown() (md) or raw text (other) for the Artifact pane
+  ├─ GET  /api/pane/{tab}  ──► pane.actions|diary|brief|artifact() → HTML fragment (SSR islands)
+  └─ POST /api/pane/actions/task-op ──► proposal.stage_task_op() under git_lock,
+                                returns the re-rendered actions fragment (400 + reason on failure)
 ```
+
+SSR islands: the Actions / Diary / Brief pane tabs are rendered server-side as
+HTML fragments by `frontend/pane.py` and swapped into `#pane-body` by the client
+(`switchTab`), rather than built from JSON in the browser. The legacy JSON
+endpoints (`/api/actions`, `/api/diary/today`, `/api/brief/today`, `/api/task_op`)
+remain for backward compatibility; both paths share the bucket order / 500-action
+cap via `pane.BUCKET_ORDER` and `pane.cap_buckets()`.
 
 - **`frontend/events.py`** — pure mapper: OpenCode SSE events → browser event model
 - **`frontend/opencode_client.py`** — async HTTP client for `opencode serve`
 - **`frontend/proxy.py`** — one long-lived session, relay loop, post-idle tool fetch; `transcript()` + `propose_ingest()` for Sweep
 - **`frontend/sweep.py`** — per-session watermark (`.sweep-state.json`), size-bounded window slicing, capture write/archive
-- **`frontend/proposal.py`** — parse the agent's structured JSON proposal; apply it deterministically to `diary/`, `tasks.todo.txt`, `topics/`, `meetings/`
+- **`frontend/proposal.py`** — parse the agent's structured JSON proposal; apply it deterministically to `diary/`, `tasks.todo.txt`, `topics/`, `meetings/`; `stage_task_op()` for single in-place task mutations
+- **`frontend/pane.py`** — SSR island rendering: HTML fragments for the Actions / Diary / Brief / Artifact pane tabs (`BUCKET_ORDER`, `cap_buckets()`, `_esc` via `html.escape`)
 - **`frontend/upload.py`** — `store_upload()` + `lwt_convert()` (llm-wiki-tools, adds traceability frontmatter) for office/PDF→Markdown; `markitdown_convert()` retained as a fallback
 - **`frontend/app.py`** — FastAPI app; browser-facing endpoints only

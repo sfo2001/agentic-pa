@@ -1,19 +1,20 @@
 "use strict";
-// Stopgap JS-side test harness for frontend/ui/app.js (Node-only, no test
-// framework, no jsdom). The repo has zero JS test infrastructure, so this
-// file is the lightest thing that actually exercises `checkPendingProposal`
-// end-to-end with a minimal DOM + fetch mock, surfaced as a pytest test
-// via tests/frontend/test_app_js.py.
+// Node-only test harness for frontend/ui/app.js (no test framework, no jsdom).
+// The repo has zero JS test infrastructure, so this file is the lightest thing
+// that exercises the client logic with a minimal DOM + fetch mock, surfaced as
+// a pytest test via tests/frontend/test_app_js.py.
 //
 // Run directly: `node tests/frontend/test_app_js.test.mjs`
 // Run via pytest: `pytest tests/frontend/test_app_js.py -q`
 //
-// Adds 4 cases Agent 2 flagged as the HIGH-2 gap:
-//   (a) 404 short-circuits without touching the panel
-//   (b) 200 with `{ok:false}` returns silently
-//   (c) 200 with a valid proposal populates sweepDiary / sweepActions /
-//       sweepTopics and unhides the panel
-//   (d) network error does not throw
+// Covers the SSR-islands client surface:
+//   • checkPendingProposal — the staged-proposal review panel (404 / {ok:false}
+//     / valid / network error / missing field)
+//   • humanizeTaskOp
+//   • switchTab — artifact empty state, server-fragment swap, fetch error
+//   • showArtifact — sanitized-html branch, raw-text-as-textContent (XSS guard),
+//     error sink uses textContent
+//   • paneBody [data-op] delegation — success swap, failure surfaced via addMsg
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -31,6 +32,7 @@ class Element {
     this.id = id;
     this.tagName = "div";
     this.textContent = "";
+    this.innerHTML = "";
     this.value = "";
     this.hidden = false;
     this.className = "";
@@ -38,12 +40,15 @@ class Element {
     this._listeners = {};
   }
   addEventListener(name, fn) { (this._listeners[name] ||= []).push(fn); }
+  dispatch(name, ev) { (this._listeners[name] || []).forEach((fn) => fn(ev)); }
   appendChild(c) { this.children.push(c); c.parent = this; return c; }
   replaceChildren(...kids) { this.children = kids; }
   querySelectorAll(sel) {
     if (sel === "li") return this.children.filter((c) => c.tagName === "li");
     return [];
   }
+  closest() { return null; }
+  classList = { toggle() {}, add() {}, remove() {} };
   get scrollTop() { return 0; }
   set scrollTop(_v) {}
   get scrollHeight() { return 0; }
@@ -51,9 +56,6 @@ class Element {
   getAttribute(k) { return this[k]; }
   // Real HTMLElement.dataset is a live DOMStringMap; the mock returns a
   // plain object whose keys become the element's `data-*` attributes.
-  // _renderSweepList writes `cb.dataset.kind = kind` and `cb.dataset.idx`
-  // — without this getter that would throw "Cannot set properties of
-  // undefined (setting 'kind')".
   get dataset() {
     if (!this._dataset) this._dataset = {};
     return this._dataset;
@@ -81,7 +83,7 @@ const sandbox = {
     },
     createDocumentFragment: () => new Element("frag"),
     createTextNode: (text) => ({ textContent: text, appendChild() {}, parent: null }),
-    querySelectorAll: (_sel) => [],  // app.js line 130 — .action buttons; unused in the test
+    querySelectorAll: (_sel) => [],  // .pane-tab / .action buttons — unused here
   },
   setTimeout, clearTimeout, setInterval, clearInterval, console,
 };
@@ -94,16 +96,19 @@ const src = readFileSync(APP_JS, "utf-8");
 vm.runInContext(src, sandbox, { filename: "app.js" });
 
 const checkPendingProposal = sandbox.checkPendingProposal;
+const humanizeTaskOp = sandbox.humanizeTaskOp;
+const switchTab = sandbox.switchTab;
+const showArtifact = sandbox.showArtifact;
 assert.equal(typeof checkPendingProposal, "function",
-  "checkPendingProposal must be defined as a top-level function in app.js");
+  "checkPendingProposal must be a top-level function in app.js");
+assert.equal(typeof humanizeTaskOp, "function",
+  "humanizeTaskOp must be a top-level function in app.js");
+assert.equal(typeof switchTab, "function",
+  "switchTab must be a top-level function in app.js");
+assert.equal(typeof showArtifact, "function",
+  "showArtifact must be a top-level function in app.js");
 
-// ── Tests ────────────────────────────────────────────────────────────────
-
-// Verify exposed helpers
-assert.equal(typeof sandbox.humanizeTaskOp, "function",
-  "humanizeTaskOp must be defined as a top-level function in app.js");
-assert.ok(Array.isArray(sandbox.BUCKET_ORDER),
-  "BUCKET_ORDER must be an array in app.js");
+// ── Harness ────────────────────────────────────────────────────────────────
 
 let passed = 0;
 let failed = 0;
@@ -111,46 +116,36 @@ async function test(name, fn) {
   try { await fn(); console.log(`  PASS  ${name}`); passed++; }
   catch (e) { console.error(`  FAIL  ${name}: ${e.message}`); failed++; }
 }
-
+const flush = () => new Promise((res) => setTimeout(res, 0));
 function setFetch(handler) { sandbox.fetch = handler; }
-// Resets the panel to the "no proposal staged" state (matching the real
-// HTML's initial `hidden` attribute and empty textareas) before each test.
-// Also clears the in-flight guard, because the load-time call at the bottom
-// of app.js (`refreshInbox(); checkPendingProposal();`) is fire-and-forget
-// and may still be in flight when the test starts — without the reset the
-// second call would short-circuit at the guard and never reach the fetch
-// mock we just installed.
 function resetEls() {
   for (const e of Object.values(els)) {
     e.hidden = true;
     e.textContent = "";
+    e.innerHTML = "";
     e.value = "";
     e.children = [];
   }
   sandbox._proposalCheckInFlight = false;
 }
 
+// ── checkPendingProposal ─────────────────────────────────────────────────
+
 await test("404 short-circuits without touching the panel", async () => {
   resetEls();
   setFetch(async () => ({ status: 404, ok: false, json: async () => ({}) }));
   await checkPendingProposal();
-  // sweepPanel stays hidden — only the dedicated 200-ok path unhides it
-  assert.equal(els["sweep-panel"].hidden, true,
-    "404 must not unhide the review panel");
-  assert.equal(els["sweep-diary"].value, "",
-    "404 must not populate the diary textarea");
-  assert.equal(els["sweep-actions"].children.length, 0,
-    "404 must not populate the actions list");
+  assert.equal(els["sweep-panel"].hidden, true, "404 must not unhide the review panel");
+  assert.equal(els["sweep-diary"].value, "", "404 must not populate the diary textarea");
+  assert.equal(els["sweep-actions"].children.length, 0, "404 must not populate the actions list");
 });
 
 await test("{ok:false} returns silently (no panel mutation)", async () => {
   resetEls();
   setFetch(async () => ({ status: 200, ok: true, json: async () => ({ ok: false }) }));
   await checkPendingProposal();
-  assert.equal(els["sweep-panel"].hidden, true,
-    "{ok:false} must not unhide the review panel");
-  assert.equal(els["sweep-diary"].value, "",
-    "{ok:false} must not populate the diary textarea");
+  assert.equal(els["sweep-panel"].hidden, true, "{ok:false} must not unhide the review panel");
+  assert.equal(els["sweep-diary"].value, "", "{ok:false} must not populate the diary textarea");
 });
 
 await test("valid proposal populates panel + sets MCP header label", async () => {
@@ -162,29 +157,23 @@ await test("valid proposal populates panel + sets MCP header label", async () =>
       proposal: {
         diary: "User shared two tasks today.",
         actions: ["(A) Prepare org chart +presentation due:2026-06-09 upd:2026-06-05"],
-        topics: [],
-        meetings: [],
+        topics: [], meetings: [],
       },
     }),
   }));
   await checkPendingProposal();
-  assert.equal(els["sweep-panel"].hidden, false,
-    "valid proposal must unhide the review panel");
+  assert.equal(els["sweep-panel"].hidden, false, "valid proposal must unhide the review panel");
   assert.equal(els["sweep-diary"].value, "User shared two tasks today.");
-  assert.equal(els["sweep-actions"].children.length, 1,
-    "valid proposal must render one action <li>");
+  assert.equal(els["sweep-actions"].children.length, 1, "valid proposal must render one action <li>");
   assert.equal(els["sweep-panel-header"].textContent, "Proposal to file",
-    "MCP-sourced proposal must label the header 'Proposal to file' (not 'Sweep proposal')");
+    "MCP-sourced proposal must label the header 'Proposal to file'");
 });
 
 await test("network error does not throw", async () => {
   resetEls();
   setFetch(async () => { throw new Error("ECONNREFUSED"); });
-  // Must not raise; the catch in checkPendingProposal swallows it and the
-  // next turn re-checks.
   await checkPendingProposal();
-  assert.equal(els["sweep-panel"].hidden, true,
-    "a failed fetch must not unhide the panel");
+  assert.equal(els["sweep-panel"].hidden, true, "a failed fetch must not unhide the panel");
 });
 
 await test("missing proposal field returns silently", async () => {
@@ -195,13 +184,7 @@ await test("missing proposal field returns silently", async () => {
     "{ok:true, proposal:undefined} must short-circuit (no panel mutation)");
 });
 
-const humanizeTaskOp = sandbox.humanizeTaskOp;
-const BUCKET_ORDER = sandbox.BUCKET_ORDER;
-
-await test("bucket order is do_now, overdue, schedule, resurfacing, stale_important", () => {
-  assert.strictEqual(JSON.stringify(BUCKET_ORDER),
-    JSON.stringify(["do_now", "overdue", "schedule", "resurfacing", "stale_important"]));
-});
+// ── humanizeTaskOp ───────────────────────────────────────────────────────
 
 await test("humanizeTaskOp renders description + verb (+value)", () => {
   const a = { text: "Sign off Atlas design", id: "abc123" };
@@ -209,118 +192,105 @@ await test("humanizeTaskOp renders description + verb (+value)", () => {
   assert.strictEqual(humanizeTaskOp(a, "reprioritize", "A"), "Sign off Atlas design  →  reprioritize (A)");
 });
 
-// ── renderActions tests ──────────────────────────────────────────────────
+// ── switchTab ────────────────────────────────────────────────────────────
 
-const renderActions = sandbox.renderActions;
-
-await test("renderActions populates buckets from API response", async () => {
+await test("switchTab('artifact') shows the empty state without fetching", async () => {
   resetEls();
-  setFetch(async () => ({
-    status: 200, ok: true,
-    json: async () => ({
-      ok: true, date: "2026-06-07",
-      buckets: {
-        do_now: [{ id: "a1", text: "Urgent", priority: "A" }],
-        schedule: [{ id: "b1", text: "Later", priority: "B" }],
-        resurfacing: [], stale_important: [], overdue: [],
-      },
-      truncated: false,
-    }),
-  }));
-  await renderActions();
-  assert.ok(els["pane-body"].children.length >= 2,
-    "must render at least the do_now and schedule bucket sections");
-  const firstLabel = els["pane-body"].children[0].children[1].children[0];
-  assert.ok(firstLabel && firstLabel.textContent.includes("Urgent"),
-    "do_now bucket must contain the Urgent action text");
-  assert.equal(els["pane-header"].textContent, "Actions",
-    "pane-header must be set to 'Actions'");
+  let fetched = false;
+  setFetch(async () => { fetched = true; return { ok: true, text: async () => "" }; });
+  switchTab("artifact");
+  await flush();
+  assert.equal(fetched, false, "artifact tab must not hit the network");
+  assert.ok(els["pane-body"].innerHTML.includes("Nothing presented yet"),
+    "artifact tab must render the empty state");
 });
 
-await test("renderActions shows empty state when no actions", async () => {
+await test("switchTab('actions') swaps in the server fragment", async () => {
   resetEls();
-  setFetch(async () => ({
-    status: 200, ok: true,
-    json: async () => ({
-      ok: true, date: "2026-06-07",
-      buckets: { do_now: [], overdue: [], schedule: [], resurfacing: [], stale_important: [] },
-      truncated: false,
-    }),
-  }));
-  await renderActions();
-  assert.ok(els["pane-body"].children.length === 0 &&
-    typeof els["pane-body"].innerHTML === "string" &&
-    els["pane-body"].innerHTML.includes("No open actions"),
-    "empty state must set innerHTML to empty-state message");
+  setFetch(async () => ({ ok: true, status: 200, text: async () => '<div class="bucket">X</div>' }));
+  switchTab("actions");
+  await flush(); await flush();
+  assert.equal(els["pane-body"].innerHTML, '<div class="bucket">X</div>',
+    "actions tab must swap in the /api/pane/actions fragment");
 });
 
-// ── renderFileTab tests ──────────────────────────────────────────────────
-
-const renderFileTab = sandbox.renderFileTab;
-
-await test("renderFileTab renders HTML from API", async () => {
+await test("switchTab fetch error shows 'Could not load pane.'", async () => {
   resetEls();
-  setFetch(async () => ({
-    status: 200, ok: true,
-    json: async () => ({ ok: true, html: "<h1>Test Diary</h1>", large: false, path: "diary/2026-06-07.md" }),
-  }));
-  await renderFileTab("/api/diary/today", "Diary");
-  assert.ok(els["pane-body"].innerHTML.includes("<h1>Test Diary</h1>"),
-    "must render the returned HTML");
-  assert.equal(els["pane-header"].textContent, "Diary",
-    "pane-header must be set to the title");
+  setFetch(async () => { throw new Error("boom"); });
+  switchTab("diary");
+  await flush(); await flush();
+  assert.ok(els["pane-body"].innerHTML.includes("Could not load pane"),
+    "a failed pane fetch must show the error state");
 });
 
-await test("renderFileTab shows 404 empty state", async () => {
-  resetEls();
-  setFetch(async () => ({ status: 404, ok: false, json: async () => ({ ok: false }) }));
-  await renderFileTab("/api/diary/today", "Diary");
-  assert.ok(els["pane-body"].innerHTML.includes("No diary for today"),
-    "404 must show 'No diary for today yet.'");
-});
+// ── showArtifact ─────────────────────────────────────────────────────────
 
-await test("renderFileTab shows large file hint", async () => {
+await test("showArtifact renders sanitized html via innerHTML", async () => {
   resetEls();
   setFetch(async () => ({
-    status: 200, ok: true,
-    json: async () => ({ ok: true, html: null, large: true, path: "diary/2026-06-07.md" }),
+    ok: true, status: 200,
+    json: async () => ({ path: "documents/note.md", html: "<h1>Hi</h1>", text: null }),
   }));
-  await renderFileTab("/api/diary/today", "Diary");
-  assert.ok(els["pane-body"].innerHTML.includes("large"),
-    "large:true must show size hint");
+  await showArtifact("documents/note.md");
+  assert.ok(els["pane-body"].innerHTML.includes("<h1>Hi</h1>"), "markdown html must render");
+  assert.equal(els["pane-header"].textContent, "documents/note.md");
 });
 
-// ── stageTaskOp tests ────────────────────────────────────────────────────
-
-const stageTaskOp = sandbox.stageTaskOp;
-
-await test("stageTaskOp calls checkPendingProposal on success", async () => {
+await test("showArtifact renders raw text as textContent (XSS guard)", async () => {
   resetEls();
-  let called = false;
-  const orig = sandbox.checkPendingProposal;
-  sandbox.checkPendingProposal = () => { called = true; };
+  const payload = '<img src=x onerror="alert(1)">';
   setFetch(async () => ({
-    status: 200, ok: true,
-    json: async () => ({ ok: true, staged: { id: "abc123", op: "complete" } }),
+    ok: true, status: 200,
+    json: async () => ({ path: "documents/evil.txt", html: null, text: payload }),
   }));
-  await stageTaskOp("abc123", "complete", null);
-  assert.ok(called, "must invoke checkPendingProposal after success");
-  sandbox.checkPendingProposal = orig;
+  await showArtifact("documents/evil.txt");
+  assert.equal(els["pane-body"].textContent, payload,
+    "non-markdown file text must be assigned to textContent verbatim");
+  assert.ok(!String(els["pane-body"].innerHTML).includes("<img"),
+    "raw file text must NEVER reach innerHTML (XSS regression guard)");
 });
 
-await test("stageTaskOp handles API error gracefully", async () => {
+await test("showArtifact error sink uses textContent (no html sink)", async () => {
   resetEls();
-  const orig = sandbox.addMsg;
-  let msgText = "";
-  sandbox.addMsg = (kind, text) => { msgText = text; };
-  setFetch(async () => ({
-    status: 400, ok: false,
-    json: async () => ({ ok: false, error: "no action with id" }),
-  }));
-  await stageTaskOp("badid", "complete", null);
-  assert.ok(msgText.includes("no action with id"),
-    "must report the API error via addMsg");
-  sandbox.addMsg = orig;
+  setFetch(async () => ({ ok: false, status: 404, json: async () => ({ error: "not found" }) }));
+  await showArtifact("documents/missing.md");
+  assert.ok(els["pane-body"].textContent.includes("Could not open"),
+    "error must be surfaced via textContent");
+  assert.ok(!String(els["pane-body"].innerHTML).includes("Could not open"),
+    "error path must not interpolate the path into an html sink");
+});
+
+// ── paneBody [data-op] click delegation ──────────────────────────────────
+
+function makeOpBtn(id, op, value) {
+  const b = new Element();
+  b._dataset = { id, op, value };
+  b.closest = (sel) => (sel === "[data-op]" ? b : null);
+  return b;
+}
+async function clickOp(btn) {
+  els["pane-body"].dispatch("click", { target: btn });
+  await flush(); await flush();
+}
+
+await test("[data-op] success swaps in the re-rendered actions fragment", async () => {
+  resetEls();
+  setFetch(async () => ({ ok: true, status: 200, text: async () => '<div class="bucket">done</div>' }));
+  await clickOp(makeOpBtn("id0001", "complete", ""));
+  assert.ok(els["pane-body"].innerHTML.includes('class="bucket"'),
+    "a successful task-op must swap in the server-rendered actions fragment");
+});
+
+await test("[data-op] failure is surfaced via addMsg, panel left intact", async () => {
+  resetEls();
+  els["pane-body"].innerHTML = "<keep>";
+  let msg = "";
+  sandbox.addMsg = (_kind, text) => { msg = text; };
+  setFetch(async () => ({ ok: false, status: 400, text: async () => "Task op failed: malformed id" }));
+  await clickOp(makeOpBtn("bad id", "complete", ""));
+  assert.ok(msg.includes("Task op failed"), "a 400 must report the error via addMsg");
+  assert.equal(els["pane-body"].innerHTML, "<keep>",
+    "a failed task-op must not clobber the pane body");
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
