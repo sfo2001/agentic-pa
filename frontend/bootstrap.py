@@ -95,6 +95,7 @@ def init_install(
     api_key: str | None = None,
     mcp_pythonpath: str | None = None,
     restrict_write: bool = False,
+    model_options: dict | None = None,
 ) -> dict:
     """Create (or verify) the Chief-of-Staff Notes install layout.
 
@@ -114,6 +115,11 @@ def init_install(
             baked as ``PYTHONPATH`` into the generated MCP server environments so
             OpenCode's ``python -m`` MCP children are self-sufficient. ``None``
             (venv mode) leaves the config untouched.
+        model_options: Optional provider options (e.g. ``{"temperature": 0}``) to
+            pin known-good defaults for a weak local backbone, forwarded to
+            ``build_opencode_config``. The wizard parses these from the
+            ``MODEL_OPTIONS`` env via ``frontend.config.parse_model_options``;
+            ``baseURL``/``apiKey`` in it are neutralized by the builder.
 
     Returns:
         A dict with keys ``install_root``, ``workspace``, ``git_dir``,
@@ -197,6 +203,7 @@ def init_install(
         api_key=api_key,
         mcp_pythonpath=mcp_pythonpath,
         restrict_write=restrict_write,
+        model_options=model_options,
     )
     opencode_json = root / "opencode.json"
     opencode_json.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")

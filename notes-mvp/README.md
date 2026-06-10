@@ -58,3 +58,8 @@ the default agent is also restricted.
 - `notes-mvp/opencode.json` and `notes-mvp/.env` are gitignored — they hold the
   only machine-specific values. The future frontend (N3) will generate the
   config the same way, per install.
+- **Model serving:** set Ollama `num_ctx ≥ 16384` (the 4K default silently breaks
+  tool calling), keep Qwen3 "thinking" enabled so structured output stays valid
+  (vLLM #18819), and prefer grammar-constrained decoding for the proposal when
+  serving via vLLM/SGLang. Full recipe: `docs/runbook.md`. The launcher
+  soft-probes the endpoint and warns if it does not return valid JSON.

@@ -15,7 +15,11 @@ import os
 import sys
 from pathlib import Path
 
-from frontend.config import CANONICAL_PROMPT_PATH, build_opencode_config
+from frontend.config import (
+    CANONICAL_PROMPT_PATH,
+    build_opencode_config,
+    parse_model_options,
+)
 
 HERE = Path(__file__).resolve().parent            # notes-mvp/
 
@@ -25,6 +29,19 @@ def _required(name: str) -> str:
     if not val:
         raise SystemExit(f"Missing required env var: {name} (see notes-mvp/.env.example)")
     return val
+
+
+def _model_options(raw: str | None) -> dict | None:
+    """Parse the optional MODEL_OPTIONS env (a JSON object) into a dict.
+
+    Thin CLI wrapper over the shared, tested ``frontend.config.parse_model_options``
+    validator: a non-JSON / non-object value is a hard error (``SystemExit``) so a
+    typo fails this batch generator loudly rather than silently shipping an
+    unpinned config. Empty/unset → None (no-op)."""
+    try:
+        return parse_model_options(raw)
+    except ValueError as e:
+        raise SystemExit(str(e)) from None
 
 
 def main() -> None:
@@ -40,6 +57,8 @@ def main() -> None:
     # auth.json; this dev helper only needs to keep the config valid for an
     # authed endpoint). Treat empty as unset.
     api_key = os.environ.get("API_KEY") or None
+    # Optional: pin provider options (e.g. temperature) via MODEL_OPTIONS=JSON.
+    model_options = _model_options(os.environ.get("MODEL_OPTIONS"))
 
     config = build_opencode_config(
         model_endpoint=model_endpoint,
@@ -48,6 +67,7 @@ def main() -> None:
         python_executable=python_executable,
         prompt_path=str(CANONICAL_PROMPT_PATH),
         api_key=api_key,
+        model_options=model_options,
     )
     out = HERE / "opencode.json"
     out.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
