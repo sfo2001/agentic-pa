@@ -43,6 +43,7 @@ def build_opencode_config(
     mcp_pythonpath: str | None = None,
     restrict_write: bool = False,
     model_options: dict | None = None,
+    docs_url: str | None = None,
 ) -> dict:
     """Build and return the opencode.json config dict.
 
@@ -97,6 +98,9 @@ def build_opencode_config(
             *after* the merge — so ``model_options`` can neither redirect the
             endpoint nor smuggle a key into the serialized config. ``None`` leaves
             the config byte-for-byte as before (pure plumbing).
+        docs_url: When set, register an optional ``docs`` MCP of ``type: remote``
+            pointing at the docdag-mcp HTTP daemon, and allow ``docs_*`` tools.
+            ``None`` (default) omits it entirely — opt-in, zero impact (M4).
     """
     permissions = {
         "bash": "deny",
@@ -116,6 +120,8 @@ def build_opencode_config(
     if restrict_write:
         permissions["write"] = "deny"
         permissions["edit"] = "deny"
+    if docs_url:
+        permissions["docs_*"] = "allow"  # optional docdag "docs" remote MCP (M4)
     # Start from any caller-pinned defaults, then force the invariants on top so
     # model_options can neither redirect the endpoint (baseURL) nor smuggle a key
     # (apiKey) into the serialized config. Omit apiKey when a real key is provided
@@ -140,6 +146,17 @@ def build_opencode_config(
     }
     if present_env:
         present_server["environment"] = present_env
+    mcp_servers = {
+        "notes": {
+            "type": "local",
+            "command": [python_executable, "-m", AGENDA_SERVER_MODULE],
+            "enabled": True,
+            "environment": notes_env,
+        },
+        "present": present_server,
+    }
+    if docs_url:  # optional docdag document-intelligence service over HTTP (M4)
+        mcp_servers["docs"] = {"type": "remote", "url": docs_url, "enabled": True}
     return {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
@@ -161,15 +178,7 @@ def build_opencode_config(
                 "permission": dict(permissions),
             }
         },
-        "mcp": {
-            "notes": {
-                "type": "local",
-                "command": [python_executable, "-m", AGENDA_SERVER_MODULE],
-                "enabled": True,
-                "environment": notes_env,
-            },
-            "present": present_server,
-        },
+        "mcp": mcp_servers,
     }
 
 

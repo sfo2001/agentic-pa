@@ -185,3 +185,19 @@ def test_default_allows_write():
     cfg = _cfg()
     assert cfg["permission"]["write"] == "allow"
     assert cfg["permission"]["edit"] == "allow"
+
+
+# ── M4: optional docs remote MCP ─────────────────────────────────────────────
+
+def test_docs_mcp_absent_by_default():
+    assert _cfg() == _cfg(docs_url=None)
+    assert "docs" not in _cfg()["mcp"]
+    assert "docs_*" not in _cfg()["permission"]
+
+
+def test_docs_mcp_block_when_url_given():
+    cfg = _cfg(docs_url="http://127.0.0.1:4097/mcp")
+    assert cfg["mcp"]["docs"] == {"type": "remote", "url": "http://127.0.0.1:4097/mcp", "enabled": True}
+    assert cfg["permission"]["docs_*"] == "allow"
+    assert cfg["agent"]["workspace-assistant"]["permission"]["docs_*"] == "allow"
+    assert "notes" in cfg["mcp"] and "present" in cfg["mcp"]
