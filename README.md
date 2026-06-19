@@ -82,6 +82,17 @@ INSTALL_ROOT=$HOME/cos-notes .venv/bin/python -m launcher.run
 
 See **[`docs/FIRST-RUN.md`](docs/FIRST-RUN.md)** for a fuller walkthrough.
 
+## Optional: document intelligence (`docs` MCP)
+
+Set **`ENABLE_DOCS=1`** to attach [docdag-mcp](https://github.com/sfo2001/docdag-mcp)
+— a standalone document-intelligence service (ingest PDF/DOCX/PPTX → searchable
+DAG, figure OCR + captions). Clone it as a sibling (`../docdag-mcp`, or point
+`DOCDAG_MCP` at it) with its own venv installed. The launcher then starts docdag's
+worker + HTTP server (own venv — no extra deps here), stores its data **outside**
+`workspace/`, reuses your model endpoint for embeddings/vision, and wires it in as a
+`docs` remote MCP so the agent gets `docs_*` tools. Off by default; see
+[`docs/adr/0013`](docs/adr/0013-docs-mcp-adapter.md).
+
 ## Documentation
 
 - **Roadmap:** [`ROADMAP.md`](ROADMAP.md) — what's shipped, what's next, and the
@@ -91,7 +102,7 @@ See **[`docs/FIRST-RUN.md`](docs/FIRST-RUN.md)** for a fuller walkthrough.
   soft-probe nudges toward.
 - **Design (authoritative, Milestone 1):** [`mvp-chief-of-staff-notes-design.md`](docs/design/mvp-chief-of-staff-notes-design.md)
 - **Glossary:** `CONTEXT.md`
-- **Decisions:** `docs/adr/0001–0005`, `docs/decisions/D-opencode-{http,sandbox}.md`
+- **Decisions:** `docs/adr/0001–0013`, `docs/decisions/D-opencode-{http,sandbox}.md`
 - **Implementation plan:** [`workspace-assistant-implementation-plan.md`](docs/design/workspace-assistant-implementation-plan.md)
 
 ## Development
