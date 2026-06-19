@@ -473,3 +473,84 @@ def test_model_endpoint_config_none_when_model_id_empty(tmp_path):
         encoding="utf-8",
     )
     assert model_endpoint_config(tmp_path) is None
+
+
+# ── M4: docs adapter helpers ─────────────────────────────────────────────────
+
+def test_docs_enabled_parsing(monkeypatch):
+    from launcher.run import docs_enabled
+    monkeypatch.delenv("ENABLE_DOCS", raising=False)
+    assert docs_enabled() is False
+    for v in ("1", "true", "yes", "on"):
+        monkeypatch.setenv("ENABLE_DOCS", v)
+        assert docs_enabled() is True
+    monkeypatch.setenv("ENABLE_DOCS", "0")
+    assert docs_enabled() is False
+
+
+def test_docdag_commands_resolves(tmp_path, monkeypatch):
+    from launcher.run import docdag_commands
+    monkeypatch.delenv("DOCDAG_MCP", raising=False)
+    repo = tmp_path / "agentic-pa"
+    repo.mkdir()
+    dd = tmp_path / "docdag-mcp" / ".venv" / "bin"
+    dd.mkdir(parents=True)
+    (dd / "docdag-server").write_text("#!/bin/sh\n")
+    (dd / "docdag-worker").write_text("#!/bin/sh\n")
+    cmds = docdag_commands(repo)
+    assert cmds and cmds[0][0].endswith("/docdag-server") and cmds[1][0].endswith("/docdag-worker")
+
+
+def test_docdag_commands_none_when_missing(tmp_path, monkeypatch):
+    from launcher.run import docdag_commands
+    monkeypatch.delenv("DOCDAG_MCP", raising=False)
+    repo = tmp_path / "solo" / "agentic-pa"
+    repo.mkdir(parents=True)  # no sibling docdag-mcp
+    assert docdag_commands(repo) is None
+
+
+def test_docdag_commands_env_override(tmp_path, monkeypatch):
+    from launcher.run import docdag_commands
+    dd = tmp_path / "custom" / ".venv" / "bin"
+    dd.mkdir(parents=True)
+    (dd / "docdag-server").write_text("")
+    (dd / "docdag-worker").write_text("")
+    monkeypatch.setenv("DOCDAG_MCP", str(tmp_path / "custom"))
+    assert docdag_commands(tmp_path / "anywhere") is not None
+
+
+def test_soft_probe_docs(monkeypatch):
+    from launcher.run import _soft_probe_docs
+    assert _soft_probe_docs("http://x/mcp", opener=lambda u, *, timeout=3.0: 200) is None
+
+    def boom(u, *, timeout=3.0):
+        raise OSError("refused")
+
+    r = _soft_probe_docs("http://x/mcp", opener=boom)
+    assert r and "unreachable" in r
+    r2 = _soft_probe_docs("http://x/mcp", opener=lambda u, *, timeout=3.0: 503)
+    assert r2 and "503" in r2
+
+
+def test_apply_docs_mcp_add_remove(tmp_path):
+    import json
+
+    from launcher.run import _apply_docs_mcp
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(json.dumps({
+        "mcp": {"notes": {}}, "permission": {},
+        "agent": {"workspace-assistant": {"permission": {}}},
+    }))
+    _apply_docs_mcp(tmp_path, "http://127.0.0.1:4097/mcp")
+    d = json.loads(cfg.read_text())
+    assert d["mcp"]["docs"] == {"type": "remote", "url": "http://127.0.0.1:4097/mcp", "enabled": True}
+    assert d["permission"]["docs_*"] == "allow"
+    assert d["agent"]["workspace-assistant"]["permission"]["docs_*"] == "allow"
+    _apply_docs_mcp(tmp_path, None)
+    d = json.loads(cfg.read_text())
+    assert "docs" not in d["mcp"] and "docs_*" not in d["permission"]
+
+
+def test_apply_docs_mcp_noop_when_config_missing(tmp_path):
+    from launcher.run import _apply_docs_mcp
+    _apply_docs_mcp(tmp_path, "http://x/mcp")  # no opencode.json → no error

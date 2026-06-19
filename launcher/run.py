@@ -376,6 +376,83 @@ def _apply_restrict_write(install_root: Path | str) -> None:
         raise
 
 
+# ── M4: optional docdag "docs" MCP adapter (opt-in, own-venv HTTP service) ────
+
+def docs_enabled() -> bool:
+    """True iff ENABLE_DOCS is set truthy (1/true/yes/on)."""
+    return os.environ.get("ENABLE_DOCS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def docdag_commands(repo_root: Path | str) -> tuple[list[str], list[str]] | None:
+    """Resolve the docdag-mcp sibling checkout's (server_argv, worker_argv), or None.
+
+    ``DOCDAG_MCP`` env overrides the default ``<repo-parent>/docdag-mcp``. Uses the
+    checkout's OWN venv console scripts so docdag's heavy deps (docling/torch) stay
+    out of agentic-pa's environment. Returns None if the venv scripts are absent.
+    """
+    base = os.environ.get("DOCDAG_MCP") or str(Path(repo_root).resolve().parent / "docdag-mcp")
+    server = Path(base) / ".venv" / "bin" / "docdag-server"
+    worker = Path(base) / ".venv" / "bin" / "docdag-worker"
+    if not (server.is_file() and worker.is_file()):
+        return None
+    return ([str(server)], [str(worker)])
+
+
+def _http_get(url: str, *, timeout: float = 3.0) -> int:
+    """GET *url*; return the HTTP status. Single network seam (injectable in tests)."""
+    req = urllib.request.Request(url, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.status
+
+
+def _soft_probe_docs(url: str, *, opener=_http_get) -> str | None:
+    """Probe the docs HTTP service; warn-only ``"Reason: …"`` or None. Mirrors
+    :func:`_soft_probe_model` — fail-closed to a warn, never aborts launch."""
+    try:
+        status = opener(url, timeout=3.0)
+    except Exception as e:  # noqa: BLE001 — unreachable endpoint is a warn, not a crash
+        return f"Reason: docs service unreachable at {url} ({e})"
+    if status >= 500:
+        return f"Reason: docs service returned HTTP {status}"
+    return None
+
+
+def _apply_docs_mcp(install_root: Path | str, docs_url: str | None) -> None:
+    """Add (url given) or remove (None) the ``docs`` remote MCP + ``docs_*`` perm
+    in opencode.json, atomically. No-op if the config can't be read. Mirrors the
+    ``_apply_restrict_write`` atomic .tmp + os.replace pattern."""
+    cfg_path = Path(install_root) / "opencode.json"
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    mcp = cfg.setdefault("mcp", {})
+    perm_blocks = [
+        cfg.get("permission"),
+        cfg.get("agent", {}).get("workspace-assistant", {}).get("permission"),
+    ]
+    if docs_url:
+        mcp["docs"] = {"type": "remote", "url": docs_url, "enabled": True}
+        for b in perm_blocks:
+            if isinstance(b, dict):
+                b["docs_*"] = "allow"
+    else:
+        mcp.pop("docs", None)
+        for b in perm_blocks:
+            if isinstance(b, dict):
+                b.pop("docs_*", None)
+    tmp = cfg_path.with_suffix(cfg_path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, cfg_path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def _ensure_present_notes_root(install_root: Path | str) -> None:
     """Patch ``opencode.json`` so the present MCP server always gets ``NOTES_ROOT``.
 
