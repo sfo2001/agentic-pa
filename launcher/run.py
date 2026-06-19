@@ -512,12 +512,17 @@ def main() -> int:
             hint="restrict the agent to tool-based edits (deny write/edit): "
                  "1/0; empty keeps the setup-baked default",
         ),
+        EnvSpec(
+            "DOCS_PORT", default="4097", parser=_port_parser,
+            hint="port for the optional docdag docs MCP service (used when ENABLE_DOCS=1)",
+        ),
     ])
     install_root = Path(os.environ.get("INSTALL_ROOT") or str(Path.home() / "cos-notes")).resolve()
     workspace = install_root / "workspace"
     git_dir = install_root / "notes.git"
     oc_port = int(os.environ.get("OPENCODE_PORT") or "4096")
     web_port = int(os.environ.get("WEB_PORT") or "8000")
+    docs_port = int(os.environ.get("DOCS_PORT") or "4097")
 
     # ---- pre-flight -------------------------------------------------------
     missing = require_tools(["opencode"])
@@ -580,6 +585,22 @@ def main() -> int:
     # the present server would raise a RuntimeError on startup.
     _ensure_present_notes_root(install_root)
 
+    # ---- optional docs adapter (docdag-mcp), opt-in via ENABLE_DOCS (M4) -------
+    # docdag runs as its OWN-venv HTTP service (started below); OpenCode connects to
+    # it as a `docs` remote MCP. Store lives OUTSIDE workspace/ (ADR-0005). When
+    # disabled/unresolved, the docs block is removed so a stale entry can't linger.
+    docs_url: str | None = None
+    docdag_cmds = None
+    if docs_enabled():
+        docdag_cmds = docdag_commands(Path(__file__).resolve().parent.parent)
+        if docdag_cmds is None:
+            print("WARNING: ENABLE_DOCS is set but docdag-mcp was not found — set "
+                  "DOCDAG_MCP or clone ../docdag-mcp (with its .venv). Continuing "
+                  "without the docs adapter.", file=sys.stderr)
+        else:
+            docs_url = os.environ.get("DOCS_URL") or f"http://127.0.0.1:{docs_port}/mcp"
+    _apply_docs_mcp(install_root, docs_url)
+
     # Soft probe of the optional present MCP (see the not-hard-gated note above),
     # spawned from cwd=workspace exactly as OpenCode will. Warn loudly on failure
     # — the agent stays up but cannot file proposals.
@@ -614,7 +635,28 @@ def main() -> int:
 
     procs: list[subprocess.Popen[bytes]] = []
     oc_log = None
+    docs_log = None
     try:
+        # Start the optional docdag docs service (its own venv) BEFORE OpenCode, so
+        # the remote MCP is reachable when OpenCode connects. Warn-only / degrades —
+        # docs is its own corpus, not load-bearing. FASTMCP_PORT controls the
+        # FastMCP HTTP port; embeddings/vision reuse the agent's model endpoint.
+        if docdag_cmds is not None:
+            server_cmd, worker_cmd = docdag_cmds
+            model_ep = model_endpoint_config(install_root)
+            docs_env = {**os.environ,
+                        "DOCDAG_STORE": str(install_root / "docdag-store"),
+                        "DOCDAG_ALLOWED_DIRS": str(workspace),
+                        "DOCDAG_PORT": str(docs_port),
+                        "FASTMCP_HOST": "127.0.0.1",
+                        "FASTMCP_PORT": str(docs_port)}
+            if model_ep:
+                docs_env["DOCDAG_EMBED_ENDPOINT"] = model_ep[0]
+                docs_env["DOCDAG_VISION_ENDPOINT"] = model_ep[0]
+            docs_log = open(install_root / "docdag.log", "ab")
+            procs.append(subprocess.Popen(worker_cmd, env=docs_env, stdout=docs_log, stderr=docs_log))
+            procs.append(subprocess.Popen(server_cmd, env=docs_env, stdout=docs_log, stderr=docs_log))
+            print(f"docs service (docdag) starting on {docs_url} → {install_root/'docdag.log'}")
         oc_env = isolated_env(install_root)
         oc_env["OPENCODE_SERVER_PASSWORD"] = oc_password
         Path(oc_env["HOME"]).mkdir(parents=True, exist_ok=True)
@@ -677,6 +719,8 @@ def main() -> int:
                 proc.kill()
         if oc_log is not None:
             oc_log.close()
+        if docs_log is not None:
+            docs_log.close()
     return 0
 
 
