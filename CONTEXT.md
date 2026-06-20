@@ -102,6 +102,12 @@ agent reads the capture and calls the tool to produce a **Diary** entry plus
 **Actions**/**Topic** updates (and a **Meeting** only if a real gathering was
 recounted). Sourced from the transcript — distinct from Ingest of a user-dropped
 Inbox file, but the *same* segmentation engine.
+The capture window is bounded by a char budget and its cut is aligned to a
+**user-turn boundary** (a window does not start with an assistant reply orphaned
+from the user turn that triggered it), so each prompt+reply stays together for
+cleaner segmentation; alignment never starves progress. (A future
+watermark-coverage confirm gate — only advance past a window the user affirms as
+fully filed — is planned with the proposal-review UI.)
 _Avoid_: "capture" (capture is automatic in OpenCode; the Sweep is the structuring
 step), "inbox sweep" (the Sweep's source is the transcript, not the Inbox folder).
 

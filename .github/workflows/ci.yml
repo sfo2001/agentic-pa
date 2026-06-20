@@ -43,10 +43,12 @@ jobs:
             agenda/requirements-dev.txt
             frontend/requirements-dev.txt
 
-      # Node 20 LTS — used for `node --check frontend/ui/app.js` and to run the
+      # Installs Node 20 LTS to run `node --check frontend/ui/app.js` and the
       # JS-side test harness via the pytest wrapper in tests/frontend/test_app_js.py.
-      # Pin to a SHA before relying on this for a release gate.
-      - uses: actions/setup-node@v4
+      # SHA-pinned to v6 (Node 24 runtime) — v4's Node 20 action runtime is being
+      # removed from GitHub runners (forced to Node 24 on 2026-06-16). node-version
+      # below is the installed target, independent of the action's own runtime.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e  # v6
         with:
           node-version: "20"
 

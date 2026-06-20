@@ -8,16 +8,24 @@ import pytest
 from launcher.run import (
     _module_importable,
     _probe_module_import,
+    _probe_structured_output,
     _python_m_module,
+    _soft_probe_model,
     _soft_probe_present,
     agenda_server_path,
     isolated_env,
+    model_endpoint_config,
     no_git_ancestor,
     notes_mcp_command,
     port_is_free,
     present_mcp_command,
     require_tools,
 )
+
+
+def _ok_completion(content: str = '{"ok": true}') -> str:
+    """A minimal OpenAI-compatible /chat/completions reply body."""
+    return json.dumps({"choices": [{"message": {"role": "assistant", "content": content}}]})
 
 
 def test_port_is_free_detects_bound_port():
@@ -332,3 +340,136 @@ def test_soft_probe_present_returns_reason_on_failure(tmp_path, capfd):
     # The exact module name is in the traceback; the helper surfaces it
     # so the launcher's stderr line is informative.
     assert "no_such_module_xyz_42" in reason
+
+
+# ── P0-A: model endpoint soft-probe (catch corrupted structured output) ──────
+
+
+def test_model_endpoint_config_reads_baseurl_and_model(tmp_path):
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({
+            "model": "workspace-llm/qwen3",
+            "provider": {"workspace-llm": {"options": {"baseURL": "http://127.0.0.1:11434/v1"}}},
+        }),
+        encoding="utf-8",
+    )
+    assert model_endpoint_config(tmp_path) == ("http://127.0.0.1:11434/v1", "qwen3")
+
+
+def test_model_endpoint_config_none_when_missing_or_malformed(tmp_path):
+    assert model_endpoint_config(tmp_path) is None  # no opencode.json
+    (tmp_path / "opencode.json").write_text("{}", encoding="utf-8")
+    assert model_endpoint_config(tmp_path) is None  # no model/provider
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({"model": "workspace-llm/m", "provider": {"workspace-llm": {"options": {}}}}),
+        encoding="utf-8",
+    )
+    assert model_endpoint_config(tmp_path) is None  # no baseURL
+
+
+def test_probe_structured_output_ok_for_valid_json():
+    captured = {}
+
+    def fake_poster(url, payload, *, timeout=5):
+        captured["url"] = url
+        captured["payload"] = payload
+        return _ok_completion('{"ok": true}')
+
+    ok, reason = _probe_structured_output("http://x/v1", "m", poster=fake_poster)
+    assert ok is True
+    assert reason == ""
+    # It posts to the chat/completions endpoint with the model id.
+    assert captured["url"] == "http://x/v1/chat/completions"
+    assert captured["payload"]["model"] == "m"
+
+
+def test_probe_structured_output_flags_non_json_reply():
+    # The exact vLLM #18819 symptom: the model returns prose / fenced junk, not JSON.
+    def fake_poster(url, payload, *, timeout=5):
+        return _ok_completion("Sure! Here is your object: ```{oops")
+
+    ok, reason = _probe_structured_output("http://x/v1", "m", poster=fake_poster)
+    assert ok is False
+    assert reason
+
+
+def test_probe_structured_output_fails_closed_on_network_error():
+    def boom(url, payload, *, timeout=5):
+        raise OSError("connection refused")
+
+    ok, reason = _probe_structured_output("http://x/v1", "m", poster=boom)
+    assert ok is False
+    assert "connection refused" in reason
+
+
+def test_soft_probe_model_none_when_no_config(tmp_path):
+    # Nothing configured → nothing to warn about (no-op, like the present probe).
+    assert _soft_probe_model(tmp_path, poster=lambda *a, **k: _ok_completion()) is None
+
+
+def test_soft_probe_model_none_when_structured_output_ok(tmp_path):
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({
+            "model": "workspace-llm/m",
+            "provider": {"workspace-llm": {"options": {"baseURL": "http://x/v1"}}},
+        }),
+        encoding="utf-8",
+    )
+    assert _soft_probe_model(tmp_path, poster=lambda *a, **k: _ok_completion()) is None
+
+
+def test_soft_probe_model_returns_reason_on_bad_output(tmp_path):
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({
+            "model": "workspace-llm/m",
+            "provider": {"workspace-llm": {"options": {"baseURL": "http://x/v1"}}},
+        }),
+        encoding="utf-8",
+    )
+    reason = _soft_probe_model(tmp_path, poster=lambda *a, **k: _ok_completion("not json"))
+    assert reason is not None
+    assert reason.startswith("Reason: ")
+
+
+def test_probe_structured_output_flags_json_that_is_not_an_object():
+    # A model that returns a JSON array/scalar (not an object) is a real corrupted
+    # mode for the propose→confirm path, which expects a JSON object proposal.
+    def fake_poster(url, payload, *, timeout=5):
+        return _ok_completion("[1, 2, 3]")
+
+    ok, reason = _probe_structured_output("http://x/v1", "m", poster=fake_poster)
+    assert ok is False
+    assert "not an object" in reason
+
+
+def test_probe_structured_output_flags_empty_choices():
+    # Malformed completion envelope: choices empty → IndexError path.
+    def fake_poster(url, payload, *, timeout=5):
+        return json.dumps({"choices": []})
+
+    ok, reason = _probe_structured_output("http://x/v1", "m", poster=fake_poster)
+    assert ok is False
+    assert "unexpected completion shape" in reason
+
+
+def test_probe_structured_output_flags_missing_completion_keys():
+    # Malformed completion envelope: no choices/message/content → KeyError path.
+    def fake_poster(url, payload, *, timeout=5):
+        return json.dumps({})
+
+    ok, reason = _probe_structured_output("http://x/v1", "m", poster=fake_poster)
+    assert ok is False
+    assert "unexpected completion shape" in reason
+
+
+def test_model_endpoint_config_none_when_model_id_empty(tmp_path):
+    # `model: "provider/"` → empty model_id; the falsy-id guard must return None
+    # rather than building a request against an empty model.
+    (tmp_path / "opencode.json").write_text(
+        json.dumps({
+            "model": "workspace-llm/",
+            "provider": {"workspace-llm": {"options": {"baseURL": "http://x/v1"}}},
+        }),
+        encoding="utf-8",
+    )
+    assert model_endpoint_config(tmp_path) is None

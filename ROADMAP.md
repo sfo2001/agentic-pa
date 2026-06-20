@@ -35,6 +35,7 @@ capability is worth adding.
 
 | Tag / date | What |
 |---|---|
+| 2026-06-10 | **P0 usability batch** — make the local backbone reliable enough to dogfood. (P0-A) A warn-only launcher soft-probe of the model endpoint's **structured-output** health (catches the Qwen3-on-vLLM corrupted-JSON class, #18819, that silently breaks propose→confirm), run on a daemon thread overlapping the health waits; optional `model_options` to **pin provider defaults** (e.g. `temperature`) threaded through both the dev generator (`MODEL_OPTIONS` env) and the production install (`bootstrap.init_install`); a serving recipe in `docs/runbook.md` (num_ctx ≥ 16K, thinking on, grammar-constrained decoding). (P0-B) `slice_window` now aligns Sweep window cuts to **user-turn boundaries** so a prompt isn't split from its reply across windows. Deferred to P1: the watermark-coverage confirm gate (needs the proposal-review UI). |
 | **v0.1.0** · 2026-06-01 | First tagged release (setuptools-scm, version from git tags). |
 | 2026-06-01 | **CI hardening** — matrix `ubuntu + windows × 3.10/3.11/3.12/3.13`, SHA-pinned actions, `pip cache`, pinned lwt-wiki install ref, non-blocking `pip-audit` job. Python floor lowered to 3.10. |
 | 2026-05-31 | **lwt-wiki integration** (ADR-0007) — document **ingest** with traceability frontmatter, **`notes_search`** (BM25 over the Ground Truth), frontend-push **lint**, and a **code-owned `index.md`**, as a conventions layer over the existing topic/meeting/task model. The read-only Agenda server broadened into the **Ground Truth service**. |

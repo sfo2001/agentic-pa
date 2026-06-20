@@ -105,6 +105,55 @@ def test_slice_window_empty_when_caught_up():
     assert window == [] and last is None
 
 
+# ── P0-B: align the budget cut to a user-turn boundary ───────────────────────
+# A window should not end in the middle of an exchange — i.e. it should not pull
+# in a fresh user turn whose assistant reply got pushed to the next window. When
+# the budget forces an early cut, back off so the next window STARTS at a user
+# turn, keeping each user-prompt + its reply together for cleaner segmentation.
+
+
+def test_slice_window_backs_off_to_keep_user_turn_with_its_reply():
+    msgs = _msgs(
+        ("m1", "user", "x" * 10), ("m2", "assistant", "y" * 10),
+        ("m3", "user", "z" * 10), ("m4", "assistant", "w" * 10),
+    )
+    # Natural budget cut (35) = [m1, m2, m3], but m3 is a new user turn whose
+    # reply m4 didn't fit → back off so m3 starts the next window with m4.
+    window, last = sweep.slice_window(msgs, after_id=None, budget=35)
+    assert [m["id"] for m in window] == ["m1", "m2"]
+    assert last == "m2"
+    # And resuming loses nothing: the rest comes back intact.
+    rest, last2 = sweep.slice_window(msgs, after_id=last, budget=35)
+    assert [m["id"] for m in rest] == ["m3", "m4"]
+    assert last2 == "m4"
+
+
+def test_slice_window_no_backoff_when_cut_already_on_user_turn():
+    msgs = _msgs(
+        ("m1", "user", "x" * 10), ("m2", "assistant", "y" * 10),
+        ("m3", "user", "z" * 10), ("m4", "assistant", "w" * 10),
+    )
+    # Budget 25 → window [m1, m2]; next message m3 is already a user turn, so the
+    # cut is aligned — no trimming.
+    window, last = sweep.slice_window(msgs, after_id=None, budget=25)
+    assert [m["id"] for m in window] == ["m1", "m2"]
+    assert last == "m2"
+
+
+def test_slice_window_makes_progress_when_no_user_boundary():
+    # Window would be [m1(user), m2(assistant)] and the next message is also an
+    # assistant turn — there's no earlier user boundary to back off to beyond the
+    # first message, so the window must NOT shrink to nothing (no stall / infinite
+    # re-slice). Progress wins over alignment.
+    msgs = _msgs(
+        ("m1", "user", "x" * 10), ("m2", "assistant", "y" * 10),
+        ("m3", "assistant", "z" * 10), ("m4", "assistant", "w" * 10),
+    )
+    window, last = sweep.slice_window(msgs, after_id=None, budget=25)
+    assert [m["id"] for m in window] == ["m1", "m2"]
+    assert last == "m2"
+
+
 def test_render_window_text_labels_roles():
     msgs = _msgs(("m1", "user", "revisit atlas"), ("m2", "assistant", "noted"))
     text = sweep.render_window_text(msgs)

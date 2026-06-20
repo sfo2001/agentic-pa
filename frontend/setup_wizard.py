@@ -285,6 +285,15 @@ def main() -> int:
     cos_pysite = os.environ.get("COS_PYSITE") or None
     if cos_pysite and not Path(cos_pysite).is_absolute():
         cos_pysite = None
+    # Optional: pin provider options (e.g. {"temperature": 0}) for a weak local
+    # backbone via MODEL_OPTIONS=<json>. A malformed value warns and is ignored
+    # (it's a tuning knob, not worth aborting an interactive install over).
+    from frontend.config import parse_model_options
+    try:
+        model_options = parse_model_options(os.environ.get("MODEL_OPTIONS"))
+    except ValueError as e:
+        print(f"  ! ignoring MODEL_OPTIONS: {e}")
+        model_options = None
     layout = init_install(
         install_root,
         model_endpoint=endpoint,
@@ -293,6 +302,7 @@ def main() -> int:
         api_key=api_key,
         mcp_pythonpath=cos_pysite,
         restrict_write=restrict_write,
+        model_options=model_options,
     )
     print(f"  ✓ workspace:    {layout['workspace']}")
     print(f"  ✓ config:       {layout['opencode_json']}  (machine-specific, not committed)")

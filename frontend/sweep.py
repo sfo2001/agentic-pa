@@ -79,6 +79,13 @@ def slice_window(
     after *after_id*. Accumulates until adding another message would exceed
     *budget* chars, but always takes at least one message so an oversized lone
     message still makes progress. ``([] , None)`` when nothing remains.
+
+    The budget cut is then aligned to a **user-turn boundary**: if it would land
+    mid-exchange (the next window would start with an assistant reply orphaned
+    from the user turn that triggered it), the window is trimmed so the next one
+    starts cleanly at a user turn — keeping each user prompt together with its
+    reply for cleaner segmentation. Alignment never empties the window (progress
+    is guaranteed over alignment).
     """
     if after_id is not None:
         idx = next((i for i, m in enumerate(messages) if m["id"] == after_id), -1)
@@ -95,6 +102,16 @@ def slice_window(
         used += size
     if not window:
         return [], None
+    # Align to a user-turn boundary when we stopped early and the next (first
+    # dropped) message is not a user turn — back off to the last user turn within
+    # the window so the next window starts there. Never below the first message.
+    n = len(window)
+    if n < len(remaining) and remaining[n].get("role") != "user":
+        k = n
+        while k > 1 and remaining[k].get("role") != "user":
+            k -= 1
+        if remaining[k].get("role") == "user":
+            window = remaining[:k]
     return window, window[-1]["id"]
 
 

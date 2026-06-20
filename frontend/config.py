@@ -7,6 +7,7 @@ duplication, no importlib-from-a-hyphenated-dir hack.
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 # The single canonical system prompt, shipped as package data (see pyproject
@@ -41,6 +42,7 @@ def build_opencode_config(
     api_key: str | None = None,
     mcp_pythonpath: str | None = None,
     restrict_write: bool = False,
+    model_options: dict | None = None,
 ) -> dict:
     """Build and return the opencode.json config dict.
 
@@ -85,6 +87,16 @@ def build_opencode_config(
             ``deny`` so the agent must route every mutation through the
             ``present_propose`` / ``present_task`` MCP tools (frontend is the
             sole writer). Default False.
+        model_options: Optional extra keys merged into the provider's
+            ``options`` block (alongside ``baseURL``/``apiKey``) so the canonical
+            builder can pin known-good defaults for a weak local backbone (e.g. a
+            fixed temperature or custom headers). The two invariants always win:
+            ``baseURL`` is forced from ``model_endpoint``, and the ``apiKey``
+            policy (inline ``"local"`` only when keyless; never inline when a real
+            key is given, so it can't shadow the auth.json credential) is applied
+            *after* the merge — so ``model_options`` can neither redirect the
+            endpoint nor smuggle a key into the serialized config. ``None`` leaves
+            the config byte-for-byte as before (pure plumbing).
     """
     permissions = {
         "bash": "deny",
@@ -104,9 +116,13 @@ def build_opencode_config(
     if restrict_write:
         permissions["write"] = "deny"
         permissions["edit"] = "deny"
-    # Omit apiKey when a real key is provided so OpenCode falls through to the
-    # auth.json credential; keep the "local" placeholder only for keyless servers.
-    options = {"baseURL": model_endpoint}
+    # Start from any caller-pinned defaults, then force the invariants on top so
+    # model_options can neither redirect the endpoint (baseURL) nor smuggle a key
+    # (apiKey) into the serialized config. Omit apiKey when a real key is provided
+    # so OpenCode falls through to the auth.json credential; keep the "local"
+    # placeholder only for keyless servers.
+    options = {**(model_options or {}), "baseURL": model_endpoint}
+    options.pop("apiKey", None)
     if not api_key:
         options["apiKey"] = "local"
     # Target mode bakes PYTHONPATH into each MCP server's environment so the
@@ -155,3 +171,28 @@ def build_opencode_config(
             "present": present_server,
         },
     }
+
+
+def parse_model_options(raw: str | None) -> dict | None:
+    """Parse a ``MODEL_OPTIONS`` JSON string into a provider-options dict.
+
+    Shared by the dev generator (``notes-mvp/gen_opencode_config.py``) and the
+    install wizard (``frontend.setup_wizard``) so the validation lives in one
+    tested place. Empty/``None`` → ``None`` (no-op). Raises ``ValueError`` on a
+    non-JSON or non-object payload; callers map that to their own UX (the CLI
+    generator hard-exits, the interactive wizard warns and continues unpinned).
+
+    This validates *shape* only. Key safety is enforced downstream by
+    :func:`build_opencode_config`, which forces ``baseURL`` and neutralizes any
+    ``apiKey`` in the merged options — so a pinned dict can neither redirect the
+    endpoint nor smuggle a credential into the serialized config.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"MODEL_OPTIONS is not valid JSON: {e}") from None
+    if not isinstance(parsed, dict):
+        raise ValueError("MODEL_OPTIONS must be a JSON object (e.g. '{\"temperature\": 0}')")
+    return parsed

@@ -86,6 +86,9 @@ See **[`docs/FIRST-RUN.md`](docs/FIRST-RUN.md)** for a fuller walkthrough.
 
 - **Roadmap:** [`ROADMAP.md`](ROADMAP.md) — what's shipped, what's next, and the
   trigger for each planned item.
+- **Runbook:** [`docs/runbook.md`](docs/runbook.md) — operating notes, incl. the
+  model-serving recipe (context window, structured output, latency) the launcher
+  soft-probe nudges toward.
 - **Design (authoritative, Milestone 1):** [`mvp-chief-of-staff-notes-design.md`](docs/design/mvp-chief-of-staff-notes-design.md)
 - **Glossary:** `CONTEXT.md`
 - **Decisions:** `docs/adr/0001–0005`, `docs/decisions/D-opencode-{http,sandbox}.md`

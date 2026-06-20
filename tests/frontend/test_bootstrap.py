@@ -36,6 +36,24 @@ def test_mcp_pythonpath_threaded_into_opencode_json(tmp_path):
     assert cfg["mcp"]["present"]["environment"]["PYTHONPATH"] == "/repo/.pysite"
 
 
+def test_model_options_threaded_into_opencode_json(tmp_path):
+    # The production install path (init_install) must forward model_options into
+    # the generated opencode.json provider options — pinning known-good defaults
+    # for a weak local backbone — while the baseURL invariant still wins.
+    root = tmp_path / "cos-notes"
+    bootstrap.init_install(
+        root,
+        model_endpoint="http://example:11434/v1",
+        model_id="test-model",
+        python_executable="/opt/.venv/bin/python",
+        model_options={"temperature": 0, "baseURL": "http://evil/v1"},
+    )
+    cfg = json.loads((root / "opencode.json").read_text(encoding="utf-8"))
+    opts = cfg["provider"][PROVIDER_ID]["options"]
+    assert opts["temperature"] == 0
+    assert opts["baseURL"] == "http://example:11434/v1"  # invariant wins over model_options
+
+
 def test_install_gitignore_appends_to_existing(tmp_path):
     """Re-install over a pre-existing .gitignore appends the lwt entries
     without clobbering existing content (idempotent, not create-only)."""

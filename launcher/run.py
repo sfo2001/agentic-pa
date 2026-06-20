@@ -12,6 +12,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -210,6 +211,93 @@ def _soft_probe_present(install_root: Path | str, workspace: str) -> str | None:
         "<no output>",
     )
     return f"Reason: {last}"
+
+
+def model_endpoint_config(install_root: Path | str) -> tuple[str, str] | None:
+    """Read ``(baseURL, model_id)`` for the workspace model from opencode.json.
+
+    ``model`` is ``"<provider>/<model_id>"`` and the provider's ``options.baseURL``
+    is the OpenAI-compatible endpoint. Returns None if the config is
+    missing/malformed or either piece is absent — the soft probe then no-ops,
+    exactly like the present-MCP probe when its command is absent."""
+    try:
+        cfg = json.loads((Path(install_root) / "opencode.json").read_text(encoding="utf-8"))
+        provider_id, model_id = str(cfg["model"]).split("/", 1)
+        base_url = cfg["provider"][provider_id]["options"]["baseURL"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not (isinstance(base_url, str) and base_url and model_id):
+        return None
+    return base_url, model_id
+
+
+def _http_post_json(url: str, payload: dict, *, timeout: float = 5.0) -> str:
+    """POST *payload* as JSON to *url*; return the response body text.
+
+    The single network seam for the model probe — injected as ``poster`` in tests
+    so the probe logic is unit-testable without a live endpoint."""
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode("utf-8", "replace")
+
+
+def _probe_structured_output(base_url, model_id, *, poster=_http_post_json) -> tuple[bool, str]:
+    """Smoke-test that the endpoint returns *valid JSON* when asked to.
+
+    Posts a tiny chat completion requesting a JSON object and checks the reply
+    parses to a dict. This catches the documented Qwen3-on-vLLM corrupted-output
+    class (vLLM #18819: ``enable_thinking=False`` + guided JSON → stray braces /
+    fenced junk / prose) and many context-truncation symptoms — the failure mode
+    that silently breaks the propose→confirm ingest path. Returns ``(ok, reason)``;
+    fails closed (``ok=False``) on any network/parse error rather than raising, so
+    a launch-time probe never aborts the launch."""
+    url = base_url.rstrip("/") + "/chat/completions"
+    payload = {
+        "model": model_id,
+        "messages": [
+            {"role": "user", "content": 'Reply with only this JSON object: {"ok": true}'}
+        ],
+        "stream": False,
+        "temperature": 0,
+        "max_tokens": 64,
+    }
+    try:
+        body = poster(url, payload, timeout=5.0)
+    except Exception as e:  # noqa: BLE001 — any failure is a fail-closed warn
+        return False, f"endpoint unreachable: {e}"
+    try:
+        content = json.loads(body)["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError) as e:
+        return False, f"unexpected completion shape: {e}"
+    try:
+        parsed = json.loads(content)
+    except (ValueError, TypeError):
+        snippet = content.strip().replace("\n", " ")[:80]
+        return False, f"model did not return valid JSON (got: {snippet!r})"
+    if not isinstance(parsed, dict):
+        return False, "model returned JSON that is not an object"
+    return True, ""
+
+
+def _soft_probe_model(install_root: Path | str, *, poster=_http_post_json) -> str | None:
+    """Probe the configured model endpoint's structured-output health at launch.
+
+    Mirrors :func:`_soft_probe_present`: returns a one-line ``"Reason: …"`` warn
+    string on failure, or None when there is nothing to warn about (no config, or
+    the endpoint returned valid JSON). Warn-only — the agent can still run; this
+    flags a backbone that will silently corrupt the propose proposal."""
+    cfg = model_endpoint_config(install_root)
+    if cfg is None:
+        return None
+    ok, reason = _probe_structured_output(cfg[0], cfg[1], poster=poster)
+    if ok:
+        return None
+    return f"Reason: {reason}"
 
 
 def _wait_health(url: str, timeout: float = 30.0, password: str | None = None) -> bool:
@@ -427,6 +515,22 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    # Soft probe of the model backbone's structured-output health, in the
+    # background. A weak/local model that returns prose or fenced junk instead of
+    # JSON (e.g. Qwen3 on vLLM with thinking disabled — vLLM #18819) will silently
+    # corrupt the propose proposal. The probe makes a real (1–5 s) chat completion,
+    # so we run it on a thread that overlaps the OpenCode/frontend health waits
+    # below rather than blocking launch serially; the result is collected just
+    # before "Ready". Warn-only: the agent still starts. See docs/runbook.md for
+    # the serving recipe (num_ctx ≥ 16K, thinking on, grammar-constrained decoding).
+    model_warn_holder: list[str | None] = [None]
+
+    def _run_model_probe() -> None:
+        model_warn_holder[0] = _soft_probe_model(install_root)
+
+    model_probe = threading.Thread(target=_run_model_probe, daemon=True)
+    model_probe.start()
+
     # A per-run random password authenticates the localhost OpenCode server so
     # other local processes/users cannot drive the sandboxed agent (design §8).
     oc_password = secrets.token_urlsafe(32)
@@ -461,6 +565,17 @@ def main() -> int:
         if not _wait_health(f"http://127.0.0.1:{web_port}/health"):
             print("ERROR: frontend did not become healthy.", file=sys.stderr)
             return 3
+        # Collect the backgrounded model probe (it overlapped the health waits).
+        model_probe.join(timeout=6.0)
+        if model_warn_holder[0] is not None:
+            print(
+                "WARNING: the model endpoint did not return valid JSON to a "
+                "structured-output smoke test — the propose→confirm ingest may "
+                "produce corrupted proposals. Check that the model serves "
+                "structured output (see docs/runbook.md: num_ctx, thinking, "
+                f"grammar). {model_warn_holder[0]}",
+                file=sys.stderr,
+            )
         print(f"Ready — open http://127.0.0.1:{web_port}/  (Ctrl+C to stop)")
 
         def _stop(*_):
