@@ -39,13 +39,26 @@ def render_markdown(text: str) -> str:
     return nh3.clean(raw_html, tags=_ALLOWED_TAGS)
 
 
-def _normalize_bold_delimiters(text: str) -> str:
-    """Strip whitespace inside ``**`` pairs so ``** bold**`` renders as bold.
+# Asymmetric ``**`` pairs only: a space on exactly ONE inner side, tight on the
+# other. This is the common LLM mistake (``** bold**`` / ``**bold **``) and is
+# *unambiguous* — the tight side proves intent to bold. Symmetric ``** x **`` is
+# deliberately left alone: it is indistinguishable from the ``**`` operator
+# (``2 ** 8``, ``a ** b``), so normalising it would corrupt prose/math. The
+# ``[^*\n]`` inner class can't cross another ``**`` or a newline, so unrelated
+# operators on the same line never get paired into one span.
+_BOLD_OPEN_RE = re.compile(r"\*\* +(\S(?:[^*\n]*?\S)?)\*\*")   # ``** bold**``
+_BOLD_CLOSE_RE = re.compile(r"\*\*(\S(?:[^*\n]*?\S)?) +\*\*")  # ``**bold **``
 
-    LLMs commonly emit ``** bold**`` (space after the opening ``**``), which is
-    invalid markdown and renders as literal asterisks.  This normalises both the
-    opening and closing sides without changing valid ``**bold**``.
+
+def _normalize_bold_delimiters(text: str) -> str:
+    """Tighten *asymmetric* ``**`` pairs so ``** bold**`` renders as bold.
+
+    LLMs commonly emit ``** bold**`` (space after the opening ``**``) or
+    ``**bold **`` (space before the closing ``**``), which CommonMark rejects as
+    emphasis. We strip the stray inner space only when the other side is already
+    tight. Fully space-padded ``** x **`` and the ``**`` operator (``2 ** 8``)
+    are intentionally untouched — see the comment on the patterns above.
     """
-    text = re.sub(r"\*\* +(\S)", r"**\1", text)
-    text = re.sub(r"(\S) +\*\*", r"\1**", text)
+    text = _BOLD_OPEN_RE.sub(r"**\1**", text)
+    text = _BOLD_CLOSE_RE.sub(r"**\1**", text)
     return text

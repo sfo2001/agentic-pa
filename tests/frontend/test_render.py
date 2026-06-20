@@ -24,3 +24,34 @@ def test_sanitizes_style_and_vbscript():
     html = render_markdown('<p style="x:y">hi</p>\n\n[c](vbscript:msgbox(1))')
     assert "style=" not in html
     assert "vbscript:" not in html
+
+
+# ── Bold-delimiter normalization (asymmetric ** spacing only) ────────────────
+
+
+def test_bold_normalizes_asymmetric_open():
+    """`** bold**` (space after opening) is the common LLM mistake → bold."""
+    assert "<strong>bold</strong>" in render_markdown("** bold**")
+    assert "<strong>bold</strong>" in render_markdown("**  bold**")  # multi-space
+
+
+def test_bold_normalizes_asymmetric_close():
+    """`**bold **` (space before closing) → bold."""
+    assert "<strong>bold</strong>" in render_markdown("**bold **")
+
+
+def test_bold_leaves_valid_bold_untouched():
+    assert "<strong>tight</strong>" in render_markdown("a **tight** b")
+
+
+def test_bold_leaves_symmetric_padded_alone():
+    """`** x **` is ambiguous with the `**` operator — must NOT become bold."""
+    assert "<strong>" not in render_markdown("** bold **")
+
+
+def test_bold_does_not_corrupt_power_operator():
+    """`2 ** 8` and multi-operator lines must survive verbatim (regression for
+    the two-global-subs bug that merged unrelated operators into a bold span)."""
+    assert render_markdown("2 ** 8") == "<p>2 ** 8</p>"
+    assert "<strong>" not in render_markdown("x = 2 ** 8 and y = 3 ** 2")
+    assert "<strong>" not in render_markdown("a ** b ** c ** d")
