@@ -35,6 +35,7 @@ BUCKET_LABEL = {
     "stale_important": "Stale & Important",
 }
 BUCKET_ORDER = ["do_now", "overdue", "schedule", "resurfacing", "stale_important"]
+# "done" is excluded — it is rendered separately after the cap (see actions())
 MAX_ACTIONS_RENDER = 500
 
 
@@ -89,7 +90,7 @@ def actions(notes_root: Path) -> str:
 
 
 def _chip(text: str, cls: str) -> str:
-    return f'<span class="chip {cls}">{_esc(text)}</span>'
+    return f'<span class="chip {_esc(cls)}">{_esc(text)}</span>'
 
 
 def _action_row(a: dict, *, done: bool = False) -> str:

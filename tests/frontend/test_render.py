@@ -49,6 +49,12 @@ def test_bold_leaves_symmetric_padded_alone():
     assert "<strong>" not in render_markdown("** bold **")
 
 
+def test_bold_lone_asymmetric_opener_without_closer_is_left_alone():
+    """A `** word` with a leading space but no closing `**` on the same line
+    must not be touched — the regex requires a complete matched pair."""
+    assert "<strong>" not in render_markdown("** bold without any closing asterisks")
+
+
 def test_bold_does_not_corrupt_power_operator():
     """`2 ** 8` and multi-operator lines must survive verbatim (regression for
     the two-global-subs bug that merged unrelated operators into a bold span)."""

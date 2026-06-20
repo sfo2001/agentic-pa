@@ -41,9 +41,12 @@ paneBody.addEventListener("click", (e) => {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ id, op, value }),
   }).then(async (r) => {
-    const html = await r.text();
-    if (!r.ok) { addMsg("system", html || "Task op failed."); return; }
-    paneBody.innerHTML = html;        // server-rendered, escaped in pane.py
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      addMsg("system", j.error || "Task op failed.");
+      return;
+    }
+    paneBody.innerHTML = await r.text();   // server-rendered, escaped in pane.py
     checkPendingProposal();
   }).catch(() => {
     addMsg("system", "Task op network error.");

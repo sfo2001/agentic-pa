@@ -59,6 +59,7 @@ def test_today_empty_when_no_tasks_file(tmp_path):
     assert result["schedule"] == []
     assert result["resurfacing"] == []
     assert result["overdue"] == []
+    assert result["done"] == []
 
 
 # ── BH-33: Pattern N — today() uses date.today() when on is None ─────────────

@@ -286,7 +286,7 @@ await test("[data-op] failure is surfaced via addMsg, panel left intact", async 
   els["pane-body"].innerHTML = "<keep>";
   let msg = "";
   sandbox.addMsg = (_kind, text) => { msg = text; };
-  setFetch(async () => ({ ok: false, status: 400, text: async () => "Task op failed: malformed id" }));
+  setFetch(async () => ({ ok: false, status: 400, json: async () => ({ ok: false, error: "Task op failed: malformed id" }) }));
   await clickOp(makeOpBtn("bad id", "complete", ""));
   assert.ok(msg.includes("Task op failed"), "a 400 must report the error via addMsg");
   assert.equal(els["pane-body"].innerHTML, "<keep>",

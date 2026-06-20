@@ -2,7 +2,7 @@
 
 The sole OpenCode HTTP client for the Chief-of-Staff Notes assistant.
 Exposes `/health`, `POST /api/message`, `GET /api/events` (SSE), and
-the **Sweep** endpoints (`POST /api/sweep`, `POST /api/sweep/confirm`)
+the **Sweep** endpoints (`POST /api/sweep/prep`, `POST /api/proposal/confirm`)
 that turn the live conversation transcript into a confirmed Diary entry
 plus Actions/Topic updates via the propose-confirm Ingest flow (ADR-0009).
 The browser talks only to this service; OpenCode and its credentials are
@@ -23,9 +23,9 @@ frontend applies the (possibly edited) proposal deterministically to
 runs housekeeping + git commit, and advances the watermark. The agent
 never writes directly during a Sweep.
 
-- `POST /api/sweep` → `{ok, proposal, capture, session, last_id}` (or
-  `{ok, proposal: null}` when nothing new)
-- `POST /api/sweep/confirm` body `{proposal, capture, session, last_id}` →
+- `POST /api/sweep/prep` → `{ok, capture, session, last_id}` (or
+  `{ok, capture: null}` when nothing new)
+- `POST /api/proposal/confirm` body `{capture, session, last_id}` →
   `{ok, applied, committed, lint}`. The body is validated by a Pydantic
   v2 model with `Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")` on slugs,
   `Field(max_length=…)` on list caps, and a literal-set `field_validator`
@@ -195,12 +195,12 @@ Browser
   │                                              │   (SSE: GET /event)
   │                                              └─► OpenCodeClient.tool_calls()
   │                                                      (poll: GET /session/{id}/message)
-  ├─ POST /api/sweep       ──► proxy.transcript() + slice + propose_ingest()
-  │                          → returns {proposal, capture, session, last_id}
+  ├─ POST /api/sweep/prep  ──► proxy.transcript() + slice + write_capture()
+  │                          → returns {capture, session, last_id}
   │                          (no writes; agent emits a structured JSON block)
-  ├─ POST /api/sweep/confirm ──► proposal.apply_proposal() (deterministic)
-  │                            + sweep.archive_capture() + wiki housekeeping
-  │                            + versioning.commit_all() + watermark advance
+  ├─ POST /api/proposal/confirm ──► proposal.apply_proposal() (deterministic)
+  │                               + sweep.archive_capture() + wiki housekeeping
+  │                               + versioning.commit_all() + watermark advance
   ├─ GET  /api/file        ──► render_markdown() (md) or raw text (other) for the Artifact pane
   ├─ GET  /api/pane/{tab}  ──► pane.actions|diary|brief|artifact() → HTML fragment (SSR islands)
   └─ POST /api/pane/actions/task-op ──► proposal.stage_task_op() under git_lock,

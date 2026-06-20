@@ -1158,7 +1158,9 @@ async def test_pane_task_op_unknown_id_returns_400(tmp_path):
         r = await c.post("/api/pane/actions/task-op",
                          json={"id": "zzz999", "op": "complete", "value": None})
     assert r.status_code == 400
-    assert "Task op failed" in r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert "zzz999" in body["error"]
     # Nothing should have been staged.
     assert not (tmp_path / "inbox" / "_proposal.json").exists()
 
@@ -1186,4 +1188,6 @@ async def test_pane_task_op_bad_reprioritize_value_returns_400(tmp_path):
         r = await c.post("/api/pane/actions/task-op",
                          json={"id": "abc999", "op": "reprioritize", "value": "Z"})
     assert r.status_code == 400
-    assert "Task op failed" in r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"]

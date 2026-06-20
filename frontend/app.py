@@ -303,23 +303,21 @@ def create_app(proxy: NotesProxy, *, notes_root: Path | str = ".", git_dir: Path
     @app.get("/api/pane/{tab}")
     async def pane_tab(tab: str):
         if tab == "actions":
-            html = render_pane.actions(notes_root)
+            pane_html = render_pane.actions(notes_root)
         elif tab == "diary":
-            html = render_pane.diary(notes_root)
+            pane_html = render_pane.diary(notes_root)
         elif tab == "brief":
-            html = render_pane.brief(notes_root)
+            pane_html = render_pane.brief(notes_root)
         else:
-            html = render_pane.artifact()
-        return HTMLResponse(html)
+            pane_html = render_pane.artifact()
+        return HTMLResponse(pane_html)
 
     @app.post("/api/pane/actions/task-op")
     async def pane_task_op(body: _TaskOpBody):
         async with git_lock:
             res = proposal.stage_task_op(notes_root, body.id, body.op, body.value)
         if not res["ok"]:
-            # Surface the failure to the client (which shows it via addMsg)
-            # instead of silently re-rendering as if it had succeeded.
-            return HTMLResponse(f"Task op failed: {res['error']}", status_code=400)
+            return JSONResponse({"ok": False, "error": res["error"]}, status_code=400)
         return HTMLResponse(render_pane.actions(notes_root))
 
     @app.post("/api/task_op")

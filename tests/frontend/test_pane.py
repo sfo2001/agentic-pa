@@ -46,7 +46,8 @@ def test_actions_humanizes_priority_and_due(tmp_path):
 
 
 def test_actions_done_bucket_offers_reopen(tmp_path):
-    """An action completed today appears under 'Done Today' with a reopen op."""
+    """An action completed today appears under 'Done Today' with a reopen op.
+    With no open actions the empty-state paragraph must also appear."""
     today = datetime.date.today().isoformat()
     (tmp_path / "tasks.todo.txt").write_text(
         f"x (B) Filed by mistake +x upd:{today} id:dn0001\n", encoding="utf-8")
@@ -56,6 +57,23 @@ def test_actions_done_bucket_offers_reopen(tmp_path):
     assert "dn0001" in html
     # A done action must NOT also expose complete/reprioritize buttons.
     assert 'data-op="complete"' not in html
+    # When no open actions exist the empty-state paragraph must still appear.
+    assert "No open actions" in html
+
+
+def test_human_date_invalid_falls_back_to_raw():
+    """_human_date returns the raw string for unparseable or None input."""
+    assert render_pane._human_date("not-a-date") == "not-a-date"
+    assert render_pane._human_date(None) is None
+
+
+def test_action_row_without_id_renders_no_ops(tmp_path):
+    """A task without an id: token must render text but no op buttons."""
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(A) No id task +x upd:2026-06-04\n", encoding="utf-8")
+    html = render_pane.actions(tmp_path)
+    assert "No id task" in html
+    assert 'data-op=' not in html and 'data-op=&#34;' not in html
 
 
 def test_diary_empty(tmp_path):
@@ -132,7 +150,7 @@ def test_actions_truncates_at_cap(tmp_path, monkeypatch):
     """More than MAX_ACTIONS_RENDER actions render a 'Showing the first N' note."""
     cap = render_pane.MAX_ACTIONS_RENDER
     view = {"date": "2026-06-08", "do_now": [], "overdue": [], "schedule": [],
-            "resurfacing": [], "stale_important": []}
+            "resurfacing": [], "stale_important": [], "done": []}
     view["do_now"] = [{"id": f"id{n:04d}", "text": f"t{n}", "priority": "A"}
                       for n in range(cap + 5)]
     monkeypatch.setattr(render_pane.engine, "today", lambda _root: view)

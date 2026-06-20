@@ -485,6 +485,11 @@ class TestTask:
         assert r["ok"] is True
         assert self._staged()["task_ops"] == [{"id": "bbb222", "op": "complete", "value": None}]
 
+    def test_stages_reopen_for_known_id(self):
+        r = server.present_task("bbb222", "reopen")
+        assert r["ok"] is True
+        assert self._staged()["task_ops"] == [{"id": "bbb222", "op": "reopen", "value": None}]
+
     def test_rejects_unknown_id(self):
         r = server.present_task("nope00", "complete")
         assert r["ok"] is False and "nope00" in r["error"]
