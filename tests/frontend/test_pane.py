@@ -29,6 +29,35 @@ def test_actions_task_op_buttons(tmp_path):
     assert 'data-id="id0001"' in html or 'data-id=&#34;id0001&#34;' in html
 
 
+def test_actions_humanizes_priority_and_due(tmp_path):
+    """The (A) code becomes a titled badge; due date is re-surfaced as a chip;
+    raw todo.txt tags never appear in the label text."""
+    (tmp_path / "tasks.todo.txt").write_text(
+        "(A) Prepare org chart +presentation due:2026-06-09 upd:2026-06-04 id:aaa111\n",
+        encoding="utf-8")
+    html = render_pane.actions(tmp_path)
+    assert 'class="pri pri-A"' in html
+    assert "Urgent &amp; important" in html          # priority gloss in the title
+    assert "Prepare org chart" in html               # clean text
+    assert "(A) Prepare" not in html                 # no bare code prefix
+    assert "Due Jun 9" in html                       # humanized due chip
+    assert "due:2026-06-09" not in html              # raw tag not shown
+    assert "chip-topic" in html and "presentation" in html
+
+
+def test_actions_done_bucket_offers_reopen(tmp_path):
+    """An action completed today appears under 'Done Today' with a reopen op."""
+    today = datetime.date.today().isoformat()
+    (tmp_path / "tasks.todo.txt").write_text(
+        f"x (B) Filed by mistake +x upd:{today} id:dn0001\n", encoding="utf-8")
+    html = render_pane.actions(tmp_path)
+    assert "Done Today" in html
+    assert 'data-op="reopen"' in html or "data-op=&#34;reopen&#34;" in html
+    assert "dn0001" in html
+    # A done action must NOT also expose complete/reprioritize buttons.
+    assert 'data-op="complete"' not in html
+
+
 def test_diary_empty(tmp_path):
     html = render_pane.diary(tmp_path)
     assert "No diary today" in html

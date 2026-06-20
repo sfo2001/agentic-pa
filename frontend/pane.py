@@ -12,6 +12,18 @@ from pathlib import Path
 from agenda import engine
 from frontend.render import MAX_DIARY_RENDER_BYTES, render_markdown
 
+# Human-readable gloss for the cryptic (A)–(D) priority codes (the Eisenhower
+# quadrant each maps to). Surfaced as a hover title so the letter stays compact
+# but its meaning is one hover away.
+_PRIORITY_TITLE = {
+    "A": "Urgent & important",
+    "B": "Important, not urgent",
+    "C": "Urgent, not important",
+    "D": "Neither urgent nor important",
+}
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
 # Single source of truth for the agenda bucket order/labels and the render cap.
 # ``frontend.app`` imports these so the JSON ``/api/actions`` endpoint and the
 # SSR ``/api/pane/actions`` fragment can never drift apart.
@@ -65,29 +77,74 @@ def actions(notes_root: Path) -> str:
         parts.append(
             f'<p class="pane-empty">Showing the first {MAX_ACTIONS_RENDER} actions.</p>'
         )
+    # "Done today" — actions completed today, each offering a reopen button so an
+    # accidental complete can be undone without a global git revert.
+    done = view.get("done", [])
+    if done:
+        parts.append('<div class="bucket bucket-done"><h4>Done Today</h4>')
+        for a in done:
+            parts.append(_action_row(a, done=True))
+        parts.append("</div>")
     return "".join(parts)
 
 
-def _action_row(a: dict) -> str:
+def _chip(text: str, cls: str) -> str:
+    return f'<span class="chip {cls}">{_esc(text)}</span>'
+
+
+def _action_row(a: dict, *, done: bool = False) -> str:
     text = a.get("text", "")
-    pri = a.get("priority", "")
-    label = f"({pri}) {text}" if pri else text
+    pri = a.get("priority") or ""
     aid = a.get("id")
-    parts = [f'<div class="action-row"><span>{_esc(label)}</span>']
+
+    parts = ['<div class="action-row' + (" is-done" if done else "") + '">']
+    # Priority badge — the letter stays, but its meaning is in the hover title
+    # (and a colour class) instead of a bare "(A)" prefix.
+    if pri:
+        title = _PRIORITY_TITLE.get(pri, "")
+        parts.append(
+            f'<span class="pri pri-{_esc(pri)}" title="{_esc(title)}">{_esc(pri)}</span>'
+        )
+    parts.append(f'<span class="action-text">{_esc(text)}</span>')
+
+    # Re-surface the structured fields the parser already extracted as readable
+    # chips instead of leaving them invisible (due date, topics).
+    due = a.get("due")
+    if due:
+        parts.append(_chip(f"Due {_human_date(due)}", "chip-due"))
+    for topic in a.get("topics", []) or []:
+        parts.append(_chip(topic, "chip-topic"))
+
     if aid:
         parts.append('<div class="ops">')
-        for p in ("A", "B", "C", "D"):
+        if done:
             parts.append(
-                f'<button data-op="reprioritize" data-id="{_esc(aid)}" data-value="{p}"'
-                f' class="task-op">{p}</button>'
+                f'<button data-op="reopen" data-id="{_esc(aid)}" data-value=""'
+                f' class="task-op" title="Re-open this action">↺ Reopen</button>'
             )
-        parts.append(
-            f'<button data-op="complete" data-id="{_esc(aid)}" data-value=""'
-            f' class="task-op">✓</button>'
-        )
+        else:
+            for p in ("A", "B", "C", "D"):
+                parts.append(
+                    f'<button data-op="reprioritize" data-id="{_esc(aid)}" data-value="{p}"'
+                    f' class="task-op" title="Set priority {p} — {_esc(_PRIORITY_TITLE[p])}">{p}</button>'
+                )
+            parts.append(
+                f'<button data-op="complete" data-id="{_esc(aid)}" data-value=""'
+                f' class="task-op" title="Mark done">✓</button>'
+            )
         parts.append("</div>")
     parts.append("</div>")
     return "".join(parts)
+
+
+def _human_date(iso: str) -> str:
+    """Format an ISO date (YYYY-MM-DD) as e.g. 'Jun 9'. Falls back to the raw
+    string if it doesn't parse (cross-platform: no strftime %-d)."""
+    try:
+        d = datetime.date.fromisoformat(iso)
+    except (ValueError, TypeError):
+        return iso
+    return f"{_MONTHS[d.month - 1]} {d.day}"
 
 
 def diary(notes_root: Path) -> str:

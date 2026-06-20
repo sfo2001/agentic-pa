@@ -53,13 +53,19 @@ def today(notes_root: Path, on: date | None = None) -> dict:
     flat list.
     """
     on = on or date.today()
-    actions = [a for a in _tasks(notes_root) if not a.done]
+    all_tasks = _tasks(notes_root)
+    actions = [a for a in all_tasks if not a.done]
 
     do_now = [a for a in actions if a.priority == "A" or (a.due and a.due <= on)]
     schedule = [a for a in actions if a.priority == "B"]
     resurfacing = [a for a in actions if a.tickler and a.tickler <= on]
     overdue = [a for a in actions if a.due and a.due < on]
     stale_important = [a for a in actions if _is_stale_item(a, on)]
+    # Actions completed *today* — the recovery window for an accidental
+    # complete. Completing bumps ``upd:`` to today, so ``updated == on`` is the
+    # bound (older completions stay out of the pane). Surfaced as a "Done today"
+    # bucket so the UI can offer a reopen op against them.
+    done_today = [a for a in all_tasks if a.done and a.updated == on]
 
     return {
         "date": on.isoformat(),
@@ -68,6 +74,7 @@ def today(notes_root: Path, on: date | None = None) -> dict:
         "resurfacing": [a.to_dict() for a in resurfacing],
         "overdue": [a.to_dict() for a in overdue],
         "stale_important": [a.to_dict() for a in stale_important],
+        "done": [a.to_dict() for a in done_today],
     }
 
 

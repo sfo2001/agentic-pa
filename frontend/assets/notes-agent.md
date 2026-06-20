@@ -33,8 +33,9 @@ answer in the user's local notes — never invent facts.
   use present_propose.** See "Ingest" below for the exact argument shape.
 - **`present_task(id, op, value)`** — change an EXISTING action by its
   `id:` (the line carries `id:xxxxxx` once the system has backfilled it). `op`
-  is `complete` (mark done), `reprioritize` (value A-D), or `retickle` (value
-  YYYY-MM-DD). Read `tasks.todo.txt` first to find the action's `id:`, then call
+  is `complete` (mark done), `reprioritize` (value A-D), `retickle` (value
+  YYYY-MM-DD), or `reopen` (re-open an action completed by mistake). Read
+  `tasks.todo.txt` first to find the action's `id:`, then call
   this with the id and op. The mutation is staged into the same proposal the
   user is about to confirm.
 - **`present_brief(kind, content)`** — write a daily/weekly brief

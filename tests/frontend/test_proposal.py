@@ -811,6 +811,32 @@ def test_apply_task_ops_complete(tmp_path):
     assert "upd:2026-06-07" in line  # upd bumped
 
 
+def test_apply_task_ops_reopen_reverses_complete(tmp_path):
+    """complete then reopen must drop the `x ` prefix (recover a mis-complete)."""
+    import datetime as _dt
+    _seed(tmp_path)
+    proposal.apply_task_ops(tmp_path, [{"id": "aaa111", "op": "complete"}],
+                            now=_dt.date(2026, 6, 7))
+    line = [ln for ln in (tmp_path/"tasks.todo.txt").read_text().splitlines() if "aaa111" in ln][0]
+    assert line.startswith("x ")
+    res = proposal.apply_task_ops(tmp_path, [{"id": "aaa111", "op": "reopen"}],
+                                  now=_dt.date(2026, 6, 8))
+    assert res["applied"] == 1 and res["errors"] == []
+    line = [ln for ln in (tmp_path/"tasks.todo.txt").read_text().splitlines() if "aaa111" in ln][0]
+    assert not line.startswith("x ")          # reopened
+    assert line.startswith("(A) ")            # priority preserved
+    assert "upd:2026-06-08" in line           # upd bumped
+
+
+def test_stage_task_op_accepts_reopen(tmp_path):
+    """reopen is a recognised op at the staging boundary (not rejected)."""
+    (tmp_path / "tasks.todo.txt").write_text(
+        "x (A) done by mistake +x upd:2026-06-07 id:abc999\n", encoding="utf-8")
+    res = proposal.stage_task_op(tmp_path, "abc999", "reopen", None)
+    assert res["ok"] is True
+    assert res["staged"] == {"id": "abc999", "op": "reopen", "value": None}
+
+
 def test_apply_task_ops_reprioritize(tmp_path):
     import datetime as _dt
     _seed(tmp_path)

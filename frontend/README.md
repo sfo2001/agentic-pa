@@ -205,7 +205,16 @@ Browser
   ├─ GET  /api/pane/{tab}  ──► pane.actions|diary|brief|artifact() → HTML fragment (SSR islands)
   └─ POST /api/pane/actions/task-op ──► proposal.stage_task_op() under git_lock,
                                 returns the re-rendered actions fragment (400 + reason on failure)
+                                ops: complete | reprioritize(A-D) | retickle(date) | reopen
 ```
+
+Task ops & the "Done Today" bucket: each action row carries op buttons
+(A/B/C/D reprioritize, ✓ complete). `engine.today()` also returns a `done`
+bucket of actions completed *today* (`upd == today`), which `pane.actions()`
+renders as "Done Today" with a **reopen** button — so an accidental complete is
+recoverable per-action instead of via a global `git revert`. The `reopen` op is
+lock-stepped across `proposal.TASK_OPS`, `proposal._rewrite_line`,
+`presenter.server.present_task`, and the agent contract (`notes-agent.md`).
 
 SSR islands: the Actions / Diary / Brief pane tabs are rendered server-side as
 HTML fragments by `frontend/pane.py` and swapped into `#pane-body` by the client
@@ -219,6 +228,6 @@ cap via `pane.BUCKET_ORDER` and `pane.cap_buckets()`.
 - **`frontend/proxy.py`** — one long-lived session, relay loop, post-idle tool fetch; `transcript()` + `propose_ingest()` for Sweep
 - **`frontend/sweep.py`** — per-session watermark (`.sweep-state.json`), size-bounded window slicing, capture write/archive
 - **`frontend/proposal.py`** — parse the agent's structured JSON proposal; apply it deterministically to `diary/`, `tasks.todo.txt`, `topics/`, `meetings/`; `stage_task_op()` for single in-place task mutations
-- **`frontend/pane.py`** — SSR island rendering: HTML fragments for the Actions / Diary / Brief / Artifact pane tabs (`BUCKET_ORDER`, `cap_buckets()`, `_esc` via `html.escape`)
+- **`frontend/pane.py`** — SSR island rendering: HTML fragments for the Actions / Diary / Brief / Artifact pane tabs (`BUCKET_ORDER`, `cap_buckets()`, `_esc` via `html.escape`); humanizes (A)–(D) priority codes into titled badges + due/topic chips, and renders the "Done Today" reopen affordance
 - **`frontend/upload.py`** — `store_upload()` + `lwt_convert()` (llm-wiki-tools, adds traceability frontmatter) for office/PDF→Markdown; `markitdown_convert()` retained as a fallback
 - **`frontend/app.py`** — FastAPI app; browser-facing endpoints only

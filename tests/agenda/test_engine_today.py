@@ -9,6 +9,22 @@ def _write_tasks(root, body):
     (root / "tasks.todo.txt").write_text(body, encoding="utf-8")
 
 
+def test_today_done_bucket_is_completed_today_only(tmp_path):
+    """The `done` bucket carries actions completed today (upd == today) so the
+    UI can offer a reopen; older completions and open actions stay out."""
+    _write_tasks(
+        tmp_path,
+        "(A) Still open +alpha upd:2026-05-30\n"
+        "x (B) Completed today +beta upd:2026-05-30 id:done01\n"
+        "x (C) Completed last week +gamma upd:2026-05-22 id:old001\n",
+    )
+    result = today(tmp_path, on=TODAY)
+    done = [a["text"] for a in result["done"]]
+    assert done == ["Completed today"]
+    assert "Still open" not in done
+    assert "Completed last week" not in done
+
+
 def test_today_buckets(tmp_path):
     _write_tasks(
         tmp_path,

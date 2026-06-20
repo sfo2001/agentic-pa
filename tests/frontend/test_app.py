@@ -1163,6 +1163,20 @@ async def test_pane_task_op_unknown_id_returns_400(tmp_path):
     assert not (tmp_path / "inbox" / "_proposal.json").exists()
 
 
+async def test_pane_task_op_reopen_stages_ok(tmp_path):
+    """POST /api/pane/actions/task-op accepts a reopen op against a done action."""
+    today = datetime.date.today().isoformat()
+    (tmp_path / "tasks.todo.txt").write_text(
+        f"x (A) done by mistake +x upd:{today} id:abc999\n", encoding="utf-8")
+    app = _app_with_root(tmp_path)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/api/pane/actions/task-op",
+                         json={"id": "abc999", "op": "reopen", "value": None})
+    assert r.status_code == 200
+    staged = json.loads((tmp_path / "inbox" / "_proposal.json").read_text())
+    assert {"id": "abc999", "op": "reopen", "value": None} in staged["task_ops"]
+
+
 async def test_pane_task_op_bad_reprioritize_value_returns_400(tmp_path):
     """An out-of-range reprioritize value must 400 rather than no-op as success."""
     (tmp_path / "tasks.todo.txt").write_text(

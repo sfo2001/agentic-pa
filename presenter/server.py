@@ -91,12 +91,13 @@ def present_brief(kind: str, content: str) -> dict:
 def present_task(id: str, op: str, value: str | None = None) -> dict:
     """Stage a mutation of an EXISTING action (by its id:) for user confirmation.
 
-    op ∈ {"complete", "reprioritize" (value=A-D), "retickle" (value=YYYY-MM-DD)}.
+    op ∈ {"complete", "reprioritize" (value=A-D), "retickle" (value=YYYY-MM-DD),
+    "reopen" (re-open an action completed by mistake)}.
     Read tasks.todo.txt first to find the id:. The op is staged into the shared
     proposal; the user confirms it in the frontend, which applies it.
     """
-    if op not in ("complete", "reprioritize", "retickle"):
-        return {"ok": False, "error": "op must be complete|reprioritize|retickle"}
+    if op not in ("complete", "reprioritize", "retickle", "reopen"):
+        return {"ok": False, "error": "op must be complete|reprioritize|retickle|reopen"}
     if op == "reprioritize" and value not in ("A", "B", "C", "D"):
         return {"ok": False, "error": "reprioritize value must be A-D"}
     if op == "retickle" and (not value or _proposal.validate_action_dates([f"t:{value}"])):

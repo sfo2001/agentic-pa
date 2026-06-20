@@ -412,6 +412,8 @@ def _rewrite_line(line: str, op: str, value: str | None, today: str) -> str:
         rest.append(f"t:{value}")
     elif op == "complete":
         done = True
+    elif op == "reopen":
+        done = False
     # bump upd:
     rest = [t for t in rest if not t.startswith("upd:")]
     rest.append(f"upd:{today}")
@@ -419,7 +421,7 @@ def _rewrite_line(line: str, op: str, value: str | None, today: str) -> str:
     return prefix + " ".join(rest)
 
 
-TASK_OPS = ("complete", "reprioritize", "retickle")
+TASK_OPS = ("complete", "reprioritize", "retickle", "reopen")
 TASK_OP_PATTERN = r"^(" + "|".join(TASK_OPS) + r")$"
 
 
