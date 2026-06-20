@@ -78,25 +78,27 @@ def test_isolated_env_overrides_home_and_xdg(tmp_path):
 
 
 def test_bh24_isolated_env_strips_ld_preload(tmp_path):
-    """BH-24: isolated_env() strips ``OPENCODE_*`` vars but does NOT strip
-    ``LD_PRELOAD``, ``LD_LIBRARY_PATH``, or other dynamic-linker env vars that
-    could inject code into the sandboxed OpenCode process (Pattern Q —
-    supply-chain risk).
-
-    A user with ``LD_PRELOAD=/home/user/hack.so`` in their shell would have
-    that library loaded into the sandboxed process, breaking confinement."""
+    """BH-24: isolated_env() strips ``OPENCODE_*`` vars and DOES strip
+    ``LD_PRELOAD``, ``LD_LIBRARY_PATH``, ``LD_AUDIT``, ``DYLD_INSERT_LIBRARIES``,
+    and ``DYLD_LIBRARY_PATH`` — the dynamic-linker injection vars that could
+    load attacker-controlled native code into the sandboxed OpenCode process
+    (Pattern Q — supply-chain risk, ADR-0005)."""
     env = isolated_env(
         tmp_path,
         base={
             "PATH": "/usr/bin",
             "LD_PRELOAD": "/home/user/hack.so",
             "LD_LIBRARY_PATH": "/home/user/lib",
+            "LD_AUDIT": "/home/user/audit.so",
+            "DYLD_INSERT_LIBRARIES": "/home/user/inject.dylib",
+            "DYLD_LIBRARY_PATH": "/home/user/dylib",
         },
     )
-    # LD_PRELOAD should be stripped (security boundary)
-    assert "LD_PRELOAD" not in env, (
-        "LD_PRELOAD bleeds into sandboxed OpenCode process"
-    )
+    assert "LD_PRELOAD" not in env, "LD_PRELOAD bleeds into sandboxed OpenCode process"
+    assert "LD_LIBRARY_PATH" not in env, "LD_LIBRARY_PATH bleeds into sandboxed process"
+    assert "LD_AUDIT" not in env, "LD_AUDIT bleeds into sandboxed process"
+    assert "DYLD_INSERT_LIBRARIES" not in env, "DYLD_INSERT_LIBRARIES bleeds into sandboxed process"
+    assert "DYLD_LIBRARY_PATH" not in env, "DYLD_LIBRARY_PATH bleeds into sandboxed process"
 
 
 def test_isolated_env_strips_opencode_vars(tmp_path):
@@ -484,8 +486,9 @@ def test_docs_enabled_parsing(monkeypatch):
     for v in ("1", "true", "yes", "on"):
         monkeypatch.setenv("ENABLE_DOCS", v)
         assert docs_enabled() is True
-    monkeypatch.setenv("ENABLE_DOCS", "0")
-    assert docs_enabled() is False
+    for v in ("0", "false", "no", "off"):
+        monkeypatch.setenv("ENABLE_DOCS", v)
+        assert docs_enabled() is False
 
 
 def test_docdag_commands_resolves(tmp_path, monkeypatch):
@@ -549,6 +552,7 @@ def test_apply_docs_mcp_add_remove(tmp_path):
     _apply_docs_mcp(tmp_path, None)
     d = json.loads(cfg.read_text())
     assert "docs" not in d["mcp"] and "docs_*" not in d["permission"]
+    assert "docs_*" not in d["agent"]["workspace-assistant"]["permission"]
 
 
 def test_apply_docs_mcp_noop_when_config_missing(tmp_path):

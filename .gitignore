@@ -13,6 +13,7 @@ MEMORY/
 # Brainstorming / writing-plans process artifacts — not project documentation;
 # the durable record lives in docs/adr/ and docs/decisions/.
 docs/superpowers/
+docs/design/
 .superpowers/
 notes-mvp/opencode.json
 notes-mvp/.env

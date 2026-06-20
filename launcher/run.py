@@ -391,8 +391,9 @@ def docdag_commands(repo_root: Path | str) -> tuple[list[str], list[str]] | None
     out of agentic-pa's environment. Returns None if the venv scripts are absent.
     """
     base = os.environ.get("DOCDAG_MCP") or str(Path(repo_root).resolve().parent / "docdag-mcp")
-    server = Path(base) / ".venv" / "bin" / "docdag-server"
-    worker = Path(base) / ".venv" / "bin" / "docdag-worker"
+    bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+    server = Path(base) / ".venv" / bin_dir / "docdag-server"
+    worker = Path(base) / ".venv" / bin_dir / "docdag-worker"
     if not (server.is_file() and worker.is_file()):
         return None
     return ([str(server)], [str(worker)])
@@ -573,6 +574,9 @@ def main() -> int:
         if not port_is_free(p):
             print(f"ERROR: port {p} is in use; free it or set OPENCODE_PORT/WEB_PORT.", file=sys.stderr)
             return 2
+    if docs_enabled() and not port_is_free(docs_port):
+        print(f"ERROR: port {docs_port} is in use; free it or set DOCS_PORT.", file=sys.stderr)
+        return 2
 
     # Patch write/edit perms from RESTRICT_WRITE (1/0). When unset, the
     # setup-baked default in opencode.json is left in place. Done here so the
@@ -598,7 +602,18 @@ def main() -> int:
                   "DOCDAG_MCP or clone ../docdag-mcp (with its .venv). Continuing "
                   "without the docs adapter.", file=sys.stderr)
         else:
-            docs_url = os.environ.get("DOCS_URL") or f"http://127.0.0.1:{docs_port}/mcp"
+            _docs_url_override = os.environ.get("DOCS_URL")
+            if _docs_url_override is not None:
+                if not _docs_url_override.startswith(("http://", "https://")):
+                    print(
+                        f"ERROR: DOCS_URL must start with http:// or https://, "
+                        f"got {_docs_url_override!r}",
+                        file=sys.stderr,
+                    )
+                    return 2
+                docs_url = _docs_url_override
+            else:
+                docs_url = f"http://127.0.0.1:{docs_port}/mcp"
     _apply_docs_mcp(install_root, docs_url)
 
     # Soft probe of the optional present MCP (see the not-hard-gated note above),
@@ -650,6 +665,9 @@ def main() -> int:
                         "DOCDAG_PORT": str(docs_port),
                         "FASTMCP_HOST": "127.0.0.1",
                         "FASTMCP_PORT": str(docs_port)}
+            for _k in ("LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+                       "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH"):
+                docs_env.pop(_k, None)
             if model_ep:
                 docs_env["DOCDAG_EMBED_ENDPOINT"] = model_ep[0]
                 docs_env["DOCDAG_VISION_ENDPOINT"] = model_ep[0]
@@ -695,6 +713,18 @@ def main() -> int:
                 f"grammar). {model_warn_holder[0]}",
                 file=sys.stderr,
             )
+        # Soft-probe the optional docs service. By the time OpenCode + frontend health
+        # waits finish, docdag has had ample time to start. Warn-only — the agent
+        # continues without docs tools if docdag is unhealthy (ADR-0013).
+        if docdag_cmds is not None:
+            docs_warn = _soft_probe_docs(docs_url)
+            if docs_warn is not None:
+                print(
+                    "WARNING: the docs (docdag) service did not respond — the "
+                    "'docs' MCP tools will be unavailable. Check docdag.log for "
+                    f"startup errors. {docs_warn}",
+                    file=sys.stderr,
+                )
         print(f"Ready — open http://127.0.0.1:{web_port}/  (Ctrl+C to stop)")
 
         def _stop(*_):
