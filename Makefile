@@ -13,7 +13,7 @@ lint-fix:
 
 # Write (or overwrite) the pre-commit hook so `git commit` auto-lints.
 install-hooks:
-	@printf '#!/usr/bin/env bash\nset -e\n# Find ruff: prefer venv, fall back to PATH.\nRUFF=$$(command -v .venv/bin/ruff 2>/dev/null || command -v ruff)\nexec "$$RUFF" check $(RUFF_TARGETS)\n' \
+	@printf '#!/usr/bin/env bash\nset -e\n# Find ruff: prefer venv (bin on Linux/macOS, Scripts on Windows), fall back to PATH.\nRUFF=$$(command -v .venv/bin/ruff 2>/dev/null || command -v .venv/Scripts/ruff 2>/dev/null || command -v ruff)\nexec "$$RUFF" check $(RUFF_TARGETS)\n' \
 		> .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
 	@echo "pre-commit hook installed — ruff will run before every commit."
