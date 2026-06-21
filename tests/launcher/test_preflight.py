@@ -562,6 +562,7 @@ def test_apply_docs_mcp_noop_when_config_missing(tmp_path):
 
 def test_apply_research_mcp_add_writes_command(tmp_path):
     import json
+
     from launcher.run import _apply_research_mcp
 
     cfg = tmp_path / "opencode.json"
@@ -584,6 +585,7 @@ def test_apply_research_mcp_add_writes_command(tmp_path):
 
 def test_apply_research_mcp_remove(tmp_path):
     import json
+
     from launcher.run import _apply_research_mcp
 
     cfg = tmp_path / "opencode.json"

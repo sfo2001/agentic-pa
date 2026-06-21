@@ -1,5 +1,7 @@
 import json
+
 import pytest
+
 from researcher._airlock import AirlockError, validate_envelope
 
 

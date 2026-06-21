@@ -1,7 +1,8 @@
 import json
-import pytest
+from unittest.mock import MagicMock, patch
+
 import httpx
-from unittest.mock import patch, MagicMock
+
 from researcher.server import query as research_query_fn
 
 
