@@ -62,7 +62,7 @@ jobs:
           pip install -r agenda/requirements-dev.txt -r frontend/requirements-dev.txt
 
       - name: Lint (ruff)
-        run: ruff check agenda frontend launcher notes-mvp presenter tests bootstrap_env.py install.py launch.py
+        run: ruff check agenda frontend launcher notes-mvp presenter researcher tests bootstrap_env.py install.py launch.py
 
       # Syntax-gate the single non-trivial JS file. The behavior tests for
       # `checkPendingProposal` run via the pytest wrapper in the next step

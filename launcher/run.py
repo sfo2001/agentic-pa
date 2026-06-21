@@ -376,6 +376,56 @@ def _apply_restrict_write(install_root: Path | str) -> None:
         raise
 
 
+# ── Research broker: optional web-researcher service (opt-in, own-venv HTTP) ─────
+
+def research_enabled() -> bool:
+    """True iff ENABLE_RESEARCH is set truthy (1/true/yes/on)."""
+    return os.environ.get("ENABLE_RESEARCH", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def researcher_commands(repo_root: Path | str) -> str | None:
+    """Resolve the web-researcher sibling checkout's endpoint console-script, or None.
+
+    ``WEB_RESEARCHER`` env overrides the default ``<repo-parent>/web-researcher``.
+    Uses the checkout's OWN venv console script so web-researcher's deps stay
+    out of agentic-pa's environment. Returns None if the checkout or venv script
+    are absent.
+    """
+    base = os.environ.get("WEB_RESEARCHER", "") or str(Path(repo_root).resolve().parent / "web-researcher")
+    if not Path(base).is_dir():
+        return None
+    bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+    endpoint = Path(base) / ".venv" / bin_dir / "web-researcher-endpoint"
+    if not endpoint.exists():
+        print(
+            f"[launcher] warning: web-researcher found at {base} but .venv not set up "
+            "(run: cd web-researcher && python3 -m venv .venv && .venv/bin/pip install -e .)",
+            file=sys.stderr,
+        )
+        return None
+    return str(endpoint)
+
+
+def _soft_probe_researcher(
+    port: int, *, retries: int = 20, delay: float = 0.5, opener=None
+) -> None:
+    """Wait for web-researcher /health to respond. Warn-only — mirrors _soft_probe_docs."""
+    _get = opener if opener is not None else _http_get
+    url = f"http://127.0.0.1:{port}/health"
+    for _ in range(retries):
+        try:
+            if _get(url, timeout=1.0) == 200:
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(delay)
+    print(
+        f"[launcher] warning: web-researcher did not become healthy on :{port} — "
+        "research_query tool will fail until it responds",
+        file=sys.stderr,
+    )
+
+
 # ── M4: optional docdag "docs" MCP adapter (opt-in, own-venv HTTP service) ────
 
 def docs_enabled() -> bool:
@@ -454,6 +504,70 @@ def _apply_docs_mcp(install_root: Path | str, docs_url: str | None) -> None:
         raise
 
 
+def _apply_research_mcp(
+    install_root: Path | str,
+    researcher_url: str | None,
+    researcher_secret: str,
+) -> None:
+    """Add (url given) or remove (None) the ``research`` local MCP + ``research_*``
+    permission in opencode.json, atomically. Mirrors ``_apply_docs_mcp``.
+
+    Writes the per-run RESEARCHER_SECRET into the environment block so the broker
+    subprocess can authenticate to the Web Researcher endpoint at runtime without
+    the secret ever appearing in a committed file.
+    """
+    cfg_path = Path(install_root) / "opencode.json"
+    try:
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        if researcher_url:
+            print(
+                f"[launcher] warning: could not read {cfg_path} — research MCP not configured "
+                "in opencode.json; the research_query tool will be unavailable.",
+                file=sys.stderr,
+            )
+        return
+    mcp = cfg.setdefault("mcp", {})
+    perm_blocks = [
+        cfg.get("permission"),
+        cfg.get("agent", {}).get("workspace-assistant", {}).get("permission"),
+    ]
+    if researcher_url:
+        research_mcp = mcp.get("research", {})
+        research_mcp.setdefault("type", "local")
+        research_mcp.setdefault("enabled", True)
+        # Derive the interpreter from the notes MCP (same venv) and always write the
+        # command — a local MCP entry without "command" cannot be started by OpenCode.
+        python_executable = cfg.get("mcp", {}).get("notes", {}).get("command", [None])[0]
+        if python_executable:
+            research_mcp["command"] = [python_executable, "-m", "researcher.server"]
+        # researcher_secret is always a non-empty token_hex(32); write it unconditionally.
+        env: dict[str, str] = {
+            "RESEARCHER_URL": researcher_url,
+            "RESEARCHER_SECRET": researcher_secret,
+        }
+        research_mcp["environment"] = env
+        mcp["research"] = research_mcp
+        for b in perm_blocks:
+            if isinstance(b, dict):
+                b["research_*"] = "allow"
+    else:
+        mcp.pop("research", None)
+        for b in perm_blocks:
+            if isinstance(b, dict):
+                b.pop("research_*", None)
+    tmp = cfg_path.with_suffix(cfg_path.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, cfg_path)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def _ensure_present_notes_root(install_root: Path | str) -> None:
     """Patch ``opencode.json`` so the present MCP server always gets ``NOTES_ROOT``.
 
@@ -517,6 +631,18 @@ def main() -> int:
             "DOCS_PORT", default="4097", parser=_port_parser,
             hint="port for the optional docdag docs MCP service (used when ENABLE_DOCS=1)",
         ),
+        EnvSpec(
+            "ENABLE_RESEARCH", default="",
+            hint="set to '1' to start the Web Researcher service alongside the agent",
+        ),
+        EnvSpec(
+            "WEB_RESEARCHER", default="",
+            hint="path to web-researcher sibling checkout (default: ../web-researcher)",
+        ),
+        EnvSpec(
+            "RESEARCHER_PORT", default="5100", parser=_port_parser,
+            hint="port for the Web Researcher endpoint (default: 5100)",
+        ),
     ])
     install_root = Path(os.environ.get("INSTALL_ROOT") or str(Path.home() / "cos-notes")).resolve()
     workspace = install_root / "workspace"
@@ -524,6 +650,7 @@ def main() -> int:
     oc_port = int(os.environ.get("OPENCODE_PORT") or "4096")
     web_port = int(os.environ.get("WEB_PORT") or "8000")
     docs_port = int(os.environ.get("DOCS_PORT") or "4097")
+    researcher_port = int(os.environ.get("RESEARCHER_PORT") or "5100")
 
     # ---- pre-flight -------------------------------------------------------
     missing = require_tools(["opencode"])
@@ -577,6 +704,9 @@ def main() -> int:
     if docs_enabled() and not port_is_free(docs_port):
         print(f"ERROR: port {docs_port} is in use; free it or set DOCS_PORT.", file=sys.stderr)
         return 2
+    if research_enabled() and not port_is_free(researcher_port):
+        print(f"ERROR: port {researcher_port} is in use; free it or set RESEARCHER_PORT.", file=sys.stderr)
+        return 2
 
     # Patch write/edit perms from RESTRICT_WRITE (1/0). When unset, the
     # setup-baked default in opencode.json is left in place. Done here so the
@@ -588,6 +718,25 @@ def main() -> int:
     # opencode.json files generated before that change lack it). Without this,
     # the present server would raise a RuntimeError on startup.
     _ensure_present_notes_root(install_root)
+
+    # ---- optional research service (web-researcher), opt-in via ENABLE_RESEARCH ----
+    # web-researcher runs as its OWN-venv HTTP service; the broker MCP in agentic-pa
+    # connects to it. Secret is generated per-run so it never lands in a committed file.
+    researcher_secret = secrets.token_hex(32)
+    researcher_ep_cmd: str | None = None
+    researcher_url: str | None = None
+    if research_enabled():
+        researcher_ep_cmd = researcher_commands(Path(__file__).resolve().parent.parent)
+        if researcher_ep_cmd is None:
+            print(
+                "WARNING: ENABLE_RESEARCH is set but web-researcher was not found — "
+                "set WEB_RESEARCHER or clone ../web-researcher (with its .venv). "
+                "Continuing without the research tool.",
+                file=sys.stderr,
+            )
+        else:
+            researcher_url = f"http://127.0.0.1:{researcher_port}"
+    _apply_research_mcp(install_root, researcher_url, researcher_secret)
 
     # ---- optional docs adapter (docdag-mcp), opt-in via ENABLE_DOCS (M4) -------
     # docdag runs as its OWN-venv HTTP service (started below); OpenCode connects to
@@ -651,7 +800,30 @@ def main() -> int:
     procs: list[subprocess.Popen[bytes]] = []
     oc_log = None
     docs_log = None
+    researcher_log = None
+    researcher_proc: subprocess.Popen[bytes] | None = None
     try:
+        # Start the optional Web Researcher service BEFORE OpenCode so the broker
+        # MCP can connect when OpenCode starts. Warn-only / degrades gracefully.
+        if researcher_ep_cmd is not None:
+            _researcher_env = {
+                **os.environ,
+                "RESEARCHER_SECRET": researcher_secret,
+                "RESEARCHER_HOST": "127.0.0.1",
+                "RESEARCHER_PORT": str(researcher_port),
+            }
+            for _k in ("LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+                       "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH"):
+                _researcher_env.pop(_k, None)
+            researcher_log = open(install_root / "researcher.log", "ab")
+            researcher_proc = subprocess.Popen(
+                [researcher_ep_cmd],
+                env=_researcher_env,
+                stdout=researcher_log,
+                stderr=researcher_log,
+            )
+            procs.append(researcher_proc)
+            _soft_probe_researcher(researcher_port)
         # Start the optional docdag docs service (its own venv) BEFORE OpenCode, so
         # the remote MCP is reachable when OpenCode connects. Warn-only / degrades —
         # docs is its own corpus, not load-bearing. FASTMCP_PORT controls the
@@ -741,7 +913,10 @@ def main() -> int:
         print("\nShutting down…")
     finally:
         for proc in reversed(procs):
-            proc.terminate()
+            try:
+                proc.terminate()
+            except OSError:
+                pass
         for proc in reversed(procs):
             try:
                 proc.wait(timeout=10)
@@ -751,6 +926,8 @@ def main() -> int:
             oc_log.close()
         if docs_log is not None:
             docs_log.close()
+        if researcher_log is not None:
+            researcher_log.close()
     return 0
 
 

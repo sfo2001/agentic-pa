@@ -44,6 +44,8 @@ def build_opencode_config(
     restrict_write: bool = False,
     model_options: dict | None = None,
     docs_url: str | None = None,
+    researcher_url: str | None = None,
+    researcher_secret: str | None = None,
 ) -> dict:
     """Build and return the opencode.json config dict.
 
@@ -101,6 +103,14 @@ def build_opencode_config(
         docs_url: When set, register an optional ``docs`` MCP of ``type: remote``
             pointing at the docdag-mcp HTTP daemon, and allow ``docs_*`` tools.
             ``None`` (default) omits it entirely — opt-in, zero impact (M4).
+        researcher_url: When set, register the ``research`` local MCP (the
+            research broker) and allow ``research_*`` tools. The broker
+            subprocess reads ``RESEARCHER_URL`` and ``RESEARCHER_SECRET`` from
+            its environment and forwards calls to the Web Researcher service
+            through the deterministic airlock. ``None`` omits it entirely.
+        researcher_secret: Shared secret passed to the broker subprocess so it
+            can authenticate to the Web Researcher endpoint. Omitted from the
+            environment block when ``None``.
     """
     permissions = {
         "bash": "deny",
@@ -122,6 +132,8 @@ def build_opencode_config(
         permissions["edit"] = "deny"
     if docs_url:
         permissions["docs_*"] = "allow"  # optional docdag "docs" remote MCP (M4)
+    if researcher_url:
+        permissions["research_*"] = "allow"  # optional research broker MCP
     # Start from any caller-pinned defaults, then force the invariants on top so
     # model_options can neither redirect the endpoint (baseURL) nor smuggle a key
     # (apiKey) into the serialized config. Omit apiKey when a real key is provided
@@ -157,6 +169,16 @@ def build_opencode_config(
     }
     if docs_url:  # optional docdag document-intelligence service over HTTP (M4)
         mcp_servers["docs"] = {"type": "remote", "url": docs_url, "enabled": True}
+    if researcher_url:  # optional research broker (web-researcher integration)
+        researcher_env: dict[str, str] = {"RESEARCHER_URL": researcher_url}
+        if researcher_secret:
+            researcher_env["RESEARCHER_SECRET"] = researcher_secret
+        mcp_servers["research"] = {
+            "type": "local",
+            "command": [python_executable, "-m", "researcher.server"],
+            "enabled": True,
+            "environment": researcher_env,
+        }
     return {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
