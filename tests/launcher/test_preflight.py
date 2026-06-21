@@ -558,3 +558,61 @@ def test_apply_docs_mcp_add_remove(tmp_path):
 def test_apply_docs_mcp_noop_when_config_missing(tmp_path):
     from launcher.run import _apply_docs_mcp
     _apply_docs_mcp(tmp_path, "http://x/mcp")  # no opencode.json → no error
+
+
+def test_apply_research_mcp_add_writes_command(tmp_path):
+    import json
+    from launcher.run import _apply_research_mcp
+
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(json.dumps({
+        "mcp": {"notes": {"command": ["/usr/bin/python3", "-m", "agenda.server"], "enabled": True}},
+        "permission": {},
+        "agent": {"workspace-assistant": {"permission": {}}},
+    }))
+    _apply_research_mcp(tmp_path, "http://127.0.0.1:5100", "s3cr3t")
+    d = json.loads(cfg.read_text())
+    research = d["mcp"]["research"]
+    assert research["command"] == ["/usr/bin/python3", "-m", "researcher.server"]
+    assert research["type"] == "local"
+    assert research["enabled"] is True
+    assert research["environment"]["RESEARCHER_URL"] == "http://127.0.0.1:5100"
+    assert research["environment"]["RESEARCHER_SECRET"] == "s3cr3t"
+    assert d["permission"]["research_*"] == "allow"
+    assert d["agent"]["workspace-assistant"]["permission"]["research_*"] == "allow"
+
+
+def test_apply_research_mcp_remove(tmp_path):
+    import json
+    from launcher.run import _apply_research_mcp
+
+    cfg = tmp_path / "opencode.json"
+    cfg.write_text(json.dumps({
+        "mcp": {
+            "notes": {"command": ["/usr/bin/python3", "-m", "agenda.server"]},
+            "research": {"type": "local", "command": ["/usr/bin/python3", "-m", "researcher.server"]},
+        },
+        "permission": {"research_*": "allow"},
+        "agent": {"workspace-assistant": {"permission": {"research_*": "allow"}}},
+    }))
+    _apply_research_mcp(tmp_path, None, "s3cr3t")
+    d = json.loads(cfg.read_text())
+    assert "research" not in d["mcp"]
+    assert "research_*" not in d["permission"]
+    assert "research_*" not in d["agent"]["workspace-assistant"]["permission"]
+
+
+def test_apply_research_mcp_warns_on_missing_config(tmp_path, capsys):
+    from launcher.run import _apply_research_mcp
+    _apply_research_mcp(tmp_path, "http://127.0.0.1:5100", "s3cr3t")
+    captured = capsys.readouterr()
+    assert "warning" in captured.err.lower()
+    assert "research" in captured.err.lower()
+
+
+def test_soft_probe_researcher_injectable(monkeypatch):
+    from launcher.run import _soft_probe_researcher
+    # Returns immediately on HTTP 200.
+    _soft_probe_researcher(5100, retries=1, opener=lambda u, *, timeout: 200)
+    # Runs all retries and warns on failure (no exception raised).
+    _soft_probe_researcher(5100, retries=1, delay=0, opener=lambda u, *, timeout: 503)

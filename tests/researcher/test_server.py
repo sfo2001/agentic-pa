@@ -52,3 +52,16 @@ def test_no_findings_message():
     with patch("httpx.post", return_value=_mock_post(empty)):
         result = research_query_fn("x")
     assert "No findings" in result
+
+
+def test_whitespace_only_urls_not_sent():
+    """urls='  ,  ' should not produce an empty URL list in the payload."""
+    captured = {}
+
+    def _capture(url, *, json=None, headers=None, timeout=None):
+        captured["payload"] = json
+        return _mock_post(_good_envelope())
+
+    with patch("httpx.post", side_effect=_capture):
+        research_query_fn("test", urls="  ,  ")
+    assert "urls" not in captured.get("payload", {})

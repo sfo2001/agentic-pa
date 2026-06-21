@@ -24,7 +24,9 @@ def query(query: str, urls: str | None = None) -> str:
     """
     payload: dict = {"query": query[:500]}
     if urls:
-        payload["urls"] = [u.strip() for u in urls.split(",")][:5]
+        parsed_urls = [u for u in (s.strip() for s in urls.split(",")) if u][:5]
+        if parsed_urls:
+            payload["urls"] = parsed_urls
 
     researcher_url = os.environ.get("RESEARCHER_URL", "http://127.0.0.1:5100")
     secret = os.environ.get("RESEARCHER_SECRET", "")
