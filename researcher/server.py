@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 import os
+
 import httpx
 from mcp.server.fastmcp import FastMCP
+
 from ._airlock import AirlockError, validate_envelope
 
 mcp = FastMCP("research")
